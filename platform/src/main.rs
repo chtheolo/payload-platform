@@ -34,4 +34,5 @@ async fn main() -> ExitCode {
 }
 
 async run(cli: Cli) -> Result<(), String> {
+    let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
 }
