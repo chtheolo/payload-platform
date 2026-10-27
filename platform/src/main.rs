@@ -1,5 +1,5 @@
 // use tokio::net::TcpListener;
-// use std::process::ExitCode;
+use std::process::ExitCode;
 use clap::Parser;
 use std::net::SocketAddr;
 use tracing_subscriber::EnvFilter;
@@ -17,12 +17,18 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     // INFO by default. Otherwise, 'RUST_LOG=debug ...'
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    println!("Hello, world!");
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            error!("{message}");
+            ExitCode::FAILURE
+        }
+    }
 }
