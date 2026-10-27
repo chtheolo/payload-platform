@@ -32,3 +32,6 @@ async fn main() -> ExitCode {
         }
     }
 }
+
+async run(cli: Cli) -> Result<(), String> {
+}
