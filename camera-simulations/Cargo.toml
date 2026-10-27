@@ -1,0 +1,21 @@
+[package]
+name = "camera-simulations"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+
+[[bin]]
+name = "camera-sim"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions"] }
+num-traits = "0.2"
+thiserror = "2.0"
+tokio = { version = "1.52", features = ["rt", "macros", "net", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
