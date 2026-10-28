@@ -95,8 +95,63 @@ pub struct Connection {
 }
 
 
+// Keep a state of a value and when it was read 
 #[derive(Debug, Clone, Serialize)]
 pub struct Reading {
     pub value: Value,
     pub observed_at: Timestamp,
+}
+
+/// What values a property, or an action argument, accepts (README, "Property descriptor").
+/// 
+/// zoom : Kind::Number = unit, min 1, max 30, resolution 0.1
+/// sensor: Kind::Enum = "visible", "thermal"
+/// palette: Kind::Enum = "whiete_hot", "black_hot", "ironbow"
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Kind {
+    Number {
+        unit: String,
+        minimum: f64,
+        maximum: f64,
+        resolution: f64,
+    },
+    Enum {
+        options: Vec<String>,
+    },
+}
+
+pub struct Action {
+    pub parameters: BTreeMap<String, Kind>
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Property {
+    #[serde(flatten)]
+    pub kind: Kind,
+    pub writable: bool,
+    ///again null until the camera has been read for the first time
+    pub value: Option<Value>,
+    pub observed_at: Option<Timestamp>,
+}
+
+impl Property {
+    /// A property the camera has before its value has been read.
+    /// Basically, we know what it is, but we haven't read its value yet
+    /// by convention ww create a constructor by returning a initialized Property
+    pub fn unread(kind: Kind, writable: bool) -> Property {
+        Property {
+            kind,
+            writable,
+            value: None,
+            observed_at: None,
+        }
+    }
+}
+
+pub struct Snapshot {
+    pub identity: Option<Identity>,
+    pub connection: Connection,
+    pub pro
+
 }
