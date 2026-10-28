@@ -128,10 +128,13 @@ pub struct Action {
 #[derive(Debug, Clone, Serialize)]
 pub struct Property {
     #[serde(flatten)]
+    ///what values is accepts
     pub kind: Kind,
+    /// can the GCS change it ?
     pub writable: bool,
     ///again null until the camera has been read for the first time
     pub value: Option<Value>,
+    /// when did we read that value 
     pub observed_at: Option<Timestamp>,
 }
 
@@ -149,9 +152,25 @@ impl Property {
     }
 }
 
+/// A snapshot of the camera the GCS can see
+#[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
-    pub identity: Option<Identity>,
-    pub connection: Connection,
-    pub pro
+    pub identity: Option<Identity>,         /// who
+    pub connection: Connection,             /// alive?
+    pub properties: BTreeMap<String, Property>, /// state
+    pub actions: BTreeMap<String, Action>   /// actions to do 
+}
 
+impl Snapshot {
+    pub fn connecting() -> Snapshot {
+        Snapshot {
+            identity: None,
+            connection: Connection {
+                Status: ConnectionStatus::Connecting,
+                last_seen: None,
+            },
+            properties: BTreeMap::new(),
+            actions: BTreeMap::new(),
+        }
+    }
 }
