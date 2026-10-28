@@ -18,7 +18,7 @@ struct Cli {
     #[arg(short, long)]
     camera: String,
     /// where the GCS API listens.
-    #[arg(short, long, default_value="0.0.0.:8080")]
+    #[arg(short, long, default_value="0.0.0.0:8080")]
     listen: SocketAddr,
 }
 
@@ -43,5 +43,5 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), String> {
     let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
-
+    Ok(())
 }
