@@ -32,11 +32,22 @@ pub enum UriError {
 
 impl CameraUri {
     pub fn parse(text: &str) -> Result<CameraUri, UriError> {
-        let url = Url::parse(text)
+        let url = Url::parse(text).map_err(|_| UriError::Invalid(text.to_string()))?;
+        println!("{}", url);
+        println!("{url:?}");
 
+        Ok(
+            CameraUri{
+                text: text.to_string(),
+                scheme: String::new(),
+                host: String::from("mavlink"),
+                port: 1000,
+                options: BTreeMap::new(),
+            }
+        )
     }
 
-    pub fn accept_only(&self, accepted: &[&str]) -> Result<(), UriError> {
-        match self.options.keys().
-    }
+    // pub fn accept_only(&self, accepted: &[&str]) -> Result<(), UriError> {
+    //     match self.options.keys().
+    // }
 }
