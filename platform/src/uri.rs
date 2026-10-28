@@ -6,7 +6,10 @@
 //! The scheme picks the driver. Host, port and options belong to that driver.
 
 use std::collections::BTreeMap;
+
 use url::Url;
+use thiserror::Error;
+
 
 #[derive(Debug, Clone)]
 pub struct CameraUri {
@@ -27,7 +30,7 @@ pub enum UriError {
     #[error("unknown option `{option}`; this driver accepts: {accepted}")]
     UnknownOption { option: String, accepted: String },
     #[error("option `{option}` has an invalid value `{value}`")]
-    badValue { option: String, value: String }
+    BadValue { option: String, value: String }
 }
 
 impl CameraUri {
