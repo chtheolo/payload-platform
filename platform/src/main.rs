@@ -33,6 +33,9 @@ async fn main() -> ExitCode {
     }
 }
 
+// maybe here I can add an AppError enum that holds
+// UriError, CameraError, NetworkError
+
 async run(cli: Cli) -> Result<(), String> {
     let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
 }
