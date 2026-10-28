@@ -35,17 +35,32 @@ pub enum UriError {
 
 impl CameraUri {
     pub fn parse(text: &str) -> Result<CameraUri, UriError> {
+        // url crate handles the tricky parts for us, ports, IPv 
         let url = Url::parse(text).map_err(|_| UriError::Invalid(text.to_string()))?;
+        let host = url.host_str().ok_or(UriError::MissingAddress)?.to_string();
+        let port = url.port().ok_or(UriError::MissingAddress)?;
+
+        // into_owned() copies the values into the entries of the map, so map can live 
+        // on each own 
+        let options = url
+            .query_pairs()
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect();
+
+
         println!("{}", url);
+        println!("{host}");
+        println!("{}", port);
         println!("{url:?}");
+        println!("{options:?}");
 
         Ok(
             CameraUri{
                 text: text.to_string(),
-                scheme: String::new(),
-                host: String::from("mavlink"),
-                port: 1000,
-                options: BTreeMap::new(),
+                scheme: url.scheme().to_string(),
+                host,
+                port,
+                options,
             }
         )
     }
