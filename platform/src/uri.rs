@@ -47,13 +47,6 @@ impl CameraUri {
             .map(|(name, value)| (name.into_owned(), value.into_owned()))
             .collect();
 
-
-        println!("{}", url);
-        println!("{host}");
-        println!("{}", port);
-        println!("{url:?}");
-        println!("{options:?}");
-
         Ok(
             CameraUri{
                 text: text.to_string(),
