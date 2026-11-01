@@ -6,6 +6,18 @@
 
 use thiserror::Error;
 
+
+/// Why a driver couldn't connect. The core retries the first kind and gives up on the second.
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    /// The camera didn't answer. It may still be starting up, so trying again makes sense.
+    #[error("{0}")]
+    NoAnswer(String),
+    /// The URI, or the camera itself, is wrong. Trying again can't help.
+    #[error("{0}")]
+    Fatal(String),
+}
+
 #[derive(Debug, Error)]
 pub enum PayloadError {
     #[error("{0}")]
@@ -37,4 +49,22 @@ pub enum PayloadError {
     Timeout,
     #[error("{0}")]
     Internal(String),
+}
+
+impl PayloadError {
+    /// The machine-readable `code` from the README's error table.
+    pub fn code(&self) -> &'static str {
+        match self {
+            PayloadError::InvalidRequest(_) => "invalid_request",
+            PayloadError::NotFound(_) => "not_found",
+            PayloadError::ReadOnly(_) => "read_only",
+            PayloadError::UnsupportedValue { .. } => "unsupported_value",
+            PayloadError::OutOfRange { .. } => "out_of_range",
+            PayloadError::Rejected(_) => "rejected",
+            PayloadError::PayloadOffline => "payload_offline",
+            PayloadError::Busy => "busy",
+            PayloadError::Timeout => "timeout",
+            PayloadError::Internal(_) => "internal",
+        }
+    }
 }
