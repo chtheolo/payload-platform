@@ -6,6 +6,21 @@
 
 use thiserror::Error;
 
+/// What can go wrong while a driver talks to its camera.
+///
+/// Rust: `#[derive(Error)]` (from thiserror) implements `std::error::Error`, and each
+/// `#[error("...")]` becomes the text that `to_string()` returns.
+#[derive(Debug, Error)]
+pub enum DriverError {
+    #[error("the camera refused: {0}")]
+    Rejected(String),
+    #[error("the camera asked to retry later")]
+    Busy,
+    #[error("no confirmation from the camera in time")]
+    Timeout,
+    #[error("{0}")]
+    Internal(String),
+}
 
 /// Why a driver couldn't connect. The core retries the first kind and gives up on the second.
 #[derive(Debug, Error)]

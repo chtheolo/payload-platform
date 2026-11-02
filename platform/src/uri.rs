@@ -6,6 +6,7 @@
 //! The scheme picks the driver. Host, port and options belong to that driver.
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
 use url::Url;
 use thiserror::Error;
@@ -58,7 +59,28 @@ impl CameraUri {
         )
     }
 
-    // pub fn accept_only(&self, accepted: &[&str]) -> Result<(), UriError> {
-    //     match self.options.keys().
-    // }
+    /// fails on any options that is not included. Protected by typos too.
+    /// `?profile=bx20` correct
+    /// `?prfile=bx20` wrong 
+    pub fn accept_only(&self, accepted: &[&str]) -> Result<(), UriError> {
+        match self.options.keys().find(|option| !accepted.contains(&option.as_str())) {
+            Some(option) => Err(UriError::UnknownOption{
+                option: option.clone(),
+                accepted: accepted.join(", "),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Return the value of the option converted to the type the caller wants
+    /// FromStr means any type that can be parsed from text
+    pub fn option<T: FromStr>(&self, option: &str, default: T) -> Result<T, UriError> {
+        match self.options.get(option){
+            None => Ok(default),
+            Some(value) => value.parse().map_err(|_| UriError::BadValue {
+                option: option.to_string(),
+                value: value.clone(),
+            }),
+        }
+    }
 }

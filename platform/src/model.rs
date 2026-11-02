@@ -3,7 +3,10 @@
 //! identity + connection + properties + actions
 //! 
 
-use std::time:SystemTime;
+use std::time::SystemTime;
+use std::collections::{BTreeMap};
+
+use serde::{Deserialize, Serialize, Serializer};
 
 // The ids of the camera. Not enum, cause future camera drivers might add new ids.
 pub mod ids {
@@ -35,7 +38,6 @@ impl Sensor {
     pub fn from_name(name: &str) -> Option<Sensor> {
         Sensor::All.into_iter().find(|sensor| sensor.as_str() == name)
     }
-
 }
 
 
@@ -47,6 +49,7 @@ pub enum Value {
 }
 
 /// Who the camera is
+#[derive(Debug, Clone, Serialize)]
 pub struct Identity {
     pub kind: String,
     pub vendor: String,
@@ -121,6 +124,7 @@ pub enum Kind {
     },
 }
 
+#[derive(Debug, Clone, Serialize)]
 pub struct Action {
     pub parameters: BTreeMap<String, Kind>
 }
@@ -155,10 +159,10 @@ impl Property {
 /// A snapshot of the camera the GCS can see
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
-    pub identity: Option<Identity>,         /// who
-    pub connection: Connection,             /// alive?
-    pub properties: BTreeMap<String, Property>, /// state
-    pub actions: BTreeMap<String, Action>   /// actions to do 
+    pub identity: Option<Identity>,         // who
+    pub connection: Connection,             // alive?
+    pub properties: BTreeMap<String, Property>, // state
+    pub actions: BTreeMap<String, Action>   // actions to do 
 }
 
 impl Snapshot {

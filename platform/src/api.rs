@@ -1,3 +1,6 @@
+/// The HTTP layer for GCS commands
+
+use axum::extract::rejection::JsonRejection;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum::extract::{Path, State};
@@ -7,11 +10,18 @@ use crate::error::PayloadError;
 
 pub fn router(payload: PayloadHandle) -> Router {
     Router::new()
+        .route("/v1/health", get(health_status))
         .route("/v1/payload", get(get_payload))
         .route(
             "/v1/payload/properties/{id}",
             get(get_property).put(put_property),
         )
+        .route("/v1/payload/actions/{id}",post(post_action))
+}
+
+
+async fn health_status(State(payload): State<PayloadHandle>) -> Json<String> {
+    Json(json!({"status":"running"}))
 }
 
 /// `GEt /v1/payload`: everything GCS can know from the latest snapshot
@@ -42,3 +52,13 @@ async fn get_property(
     //     .properties
     //     .get(&id).cloned()
 }
+// async fn post_action(
+//     State(payload): State<PayloadHandle>,
+//     Path(id): Path<String>,
+//     body: Result<Json<BTreeMapM<String, Value>>, JsonRejection>,
+// ) -> Result<Json<, PayloadError> {
+//     let Json(arguments) = body.map_err(invalid_body)?;
+//     let properties = payload.invoke(&id, )
+
+
+// }

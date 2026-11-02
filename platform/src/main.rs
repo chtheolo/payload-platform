@@ -1,4 +1,8 @@
 mod uri;
+mod payload;
+mod drivers;
+mod error;
+mod model;
 
 // use tokio::net::TcpListener;
 use std::process::ExitCode;
@@ -43,5 +47,9 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), String> {
     let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
+    info!("Camera URI: {:?}", uri);
+    info!("Camera URI: {:#?}", uri);
+    let (handle, core_task) = payload::start(uri);
+    // info!("Handle: {:#?}, core_task: {:?}", handle, core_task);
     Ok(())
 }
