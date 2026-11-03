@@ -40,9 +40,12 @@ pub struct CameraId {
 // It's our own small description of on Mavlink command we want to send to the camera
 #[derive(Debug, Clone, Copy)]
 pub struct Command {
-    /// which command
+    /// which command - e.g. MAV_CMD_REQUEST_MESSAGE=512
     pub id: MavCmd,
     /// its 7 param numbers in every command
+    /// 1 - id of the message - 259=CAMERA_INFORMATION
+    /// 2-6 - extra options(which stream, which index) - 0.0 not used
+    /// 7 - where to send the reply:0=default , 2=bcast - 0.0 reply back to us 
     pub params: [f32; 7],
     /// Whether sending it twice does no harm. Only such commands are resent when the ACK
     /// doesn't come: resending "zoom one step in" after a lost ACK could zoom in twice.
@@ -141,13 +144,84 @@ impl Link {
         }
     }
 
+    // This the function that we ask data from the camera 
+    // cameras will not send their state, only heartbeats. So, if we want 
+    // to know the zoom, the sensor or the camera's name, we have to ask.
     pub async fn request_message(
         &self,
         message_id: u32,
         count: usize,
     ) -> Result<Vec<MavMessage>, LinkError> {
-        let request = Command::repeatable()
+        /**
+         * MAV_CMD_REQUEST_MESSAGE (512) defines its 7 parameters like this in the MAVLink standard:
+         * 1    |  ID of the message you want               | message_id(259=CAMERA_INFORMATION)
+         * 2-6  | extra options(e.g. which streams)         | 0.0 not used
+         * 7    | where to send reply: 0(default), 2(bcast) | 0.0 = us
+         */
+        let request = Command::repeatable(
+            MavCmd::MAV_CMD_REQUEST_MESSAGE,
+            [message_id as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        for attempt in 0..ATTEMPTS {
+            // fresh for every attempt, so answers to an earlier attempt not to be mixed 
+            let mut found = Vec::new(); // the answers collected so far 
+            let mut refused = None;     // set if the camera says "no"
+            // pick: the filter that decides what incoming message means 
+            let mut pick = |incoming: &MavMessage| {
+                match incoming {
+                    MavMessage::COMMAND_ACK(ack) if ack.command == request.id => {
+                        let accepted = matches!(
+                            ack.result,
+                            MavResult::MAV_RESULT_ACCEPTED | MavResult::MAV_RESULT_IN_PROGRESS
+                        );
+                        if !accepted {
+                            refused = Some(ack.result);
+                            return Some(());
+                        }
+                    }
+                    message if message.message_id() == message_id => {
+                        found.push(message.clone());
+                        if found.len() == count {
+                            return Some(());
+                        }
+                    }
+                    _ => {} // if e.g. it's a heartbeat we will fall here and ignore it 
+                }
+                None
+            };
 
+            self.attempt(&self.command_long(&request, attempt), pick)
+        }
+    }
+
+    async fn attempt<T>(
+        &self,
+        message: &MavMessage,
+        pick: &mut impl 
+    ) {
+
+    }
+
+    /**
+     * platform     | ---COMMAND_LONG(512,param1=259)---> | send me camera info
+     */
+    /// fun to create a command long MavMessage
+    fn command_long(&self, command: &Command, confirmation: u8) -> MavMessage {
+        // destructure in the 7 params
+        let [param1, param2, param3, param4, param5, param6, param7] = command.params;
+        MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
+            param1,
+            param2,
+            param3,
+            param4,
+            param5,
+            param6,
+            param7,
+            command: command.id,
+            target_system: self.camera.system_id,
+            target_component: self.camera.component_id,
+            confirmation,
+        })
     }
 }
 
