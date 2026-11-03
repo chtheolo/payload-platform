@@ -106,6 +106,12 @@ impl Link {
             _ => Err(LinkError::Timeout),
         }
     }
+
+    pub async fn request_message(
+        &self,
+        message_id: u32,
+        count: usize,
+    ) -> Result<Vec
 }
 
 /// The sending side of the link, shared with the heartbeat task.
@@ -218,3 +224,17 @@ fn decode(datagram: &[u8]) -> Vec(MavHeader, MavMessage)> {
         }
     }
 } 
+
+/// The next message from the camera, or `None` once the link is gone.
+///
+/// Rust: a broadcast receiver reports `Lagged` when it fell behind and missed messages. For
+/// us that only means "keep reading".
+async fn next(messages: &mut broadcast::Receiver<MavMessage>) -> Option<MavMessage> {
+    loop {
+        match messages.recv().await {
+            Ok(message) => return Some(message),
+            Err(RecvError::Lagged(_)) => continue,
+            Err(RecvError::Closed) => return None,
+        }
+    }
+}
