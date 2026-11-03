@@ -36,6 +36,19 @@ pub struct CameraId {
     pub component_id: u8,
 }
 
+/// A MAVLink command ready to send: which command, and its seven parameters.
+// It's our own small description of on Mavlink command we want to send to the camera
+#[derive(Debug, Clone, Copy)]
+pub struct Command {
+    /// which command
+    pub id: MavCmd,
+    /// its 7 numbers
+    pub params: [f32; 7],
+    /// Whether sending it twice does no harm. Only such commands are resent when the ACK
+    /// doesn't come: resending "zoom one step in" after a lost ACK could zoom in twice.
+    pub repeatable: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum LinkError {
     #[error("no answer from the camera")]
@@ -111,7 +124,10 @@ impl Link {
         &self,
         message_id: u32,
         count: usize,
-    ) -> Result<Vec
+    ) -> Result<Vec<MavMessage>, LinkError> {
+        let request = Command
+
+    }
 }
 
 /// The sending side of the link, shared with the heartbeat task.
