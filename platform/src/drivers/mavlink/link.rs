@@ -36,6 +36,14 @@ pub struct CameraId {
     pub component_id: u8,
 }
 
+#[derive(Debug, Error)]
+pub enum LinkError {
+    #[error("no answer from the camera")]
+    Timeout,
+    #[error("the camera answered {0:?}")]
+    Refused(MavResult),
+}
+
 pub struct Link {
     outbox: Outbox,
     camera: CameraId,
@@ -49,6 +57,7 @@ pub struct Link {
 
 impl Link {
     /// Opens a UDP socket towards the camera and starts the two background tasks.
+    // io::Result<Link> is a shorthand for Result<Link, std::io::Error>
     pub async fn open(address: SocketAddr, camera: CameraId) -> io::Result<Link> {
         let local = if address.is_ipv4() {"0.0.0.0:0"} else {"[::]:0"};
         let socket = UdpSocket::bind(local).await?;
@@ -70,9 +79,32 @@ impl Link {
                 outbox.socket.clone(),
                 camera,
                 incoming.clone(),
-                last_heard.clone()
+                last_heard.clone(),
             ))
-        ]
+        ];
+        Ok(Link {
+            outbox,
+            camera,
+            incoming,
+            last_heard,
+            tasks,
+        })
+    }
+
+    pub async fn wait_for_heartbeat(&self, limit: Duration) -> Result<(), LinkError> {
+        let mut messages = self.incoming.subscribe();
+        let heartbeat = async {
+            while let Some(message) = next(&mut messages).await {
+                if matches!(message, MavMessage::HEARTBEAT(_)) {
+                    return true;
+                }
+            }
+            false
+        };
+        match timeout(limit, heartbeat).await {
+            Ok(true) => Ok(()),
+            _ => Err(LinkError::Timeout),
+        }
     }
 }
 
