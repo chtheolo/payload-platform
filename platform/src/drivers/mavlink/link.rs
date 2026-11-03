@@ -42,12 +42,33 @@ pub struct CameraId {
 pub struct Command {
     /// which command
     pub id: MavCmd,
-    /// its 7 numbers
+    /// its 7 param numbers in every command
     pub params: [f32; 7],
     /// Whether sending it twice does no harm. Only such commands are resent when the ACK
     /// doesn't come: resending "zoom one step in" after a lost ACK could zoom in twice.
     pub repeatable: bool,
 }
+
+impl Command {
+    /// A command that sets an absolute state, so it may be resent.
+    pub fn repeatable(id: MavCmd, params: [f32; 7]) -> Command {
+        Command {
+            id,
+            params,
+            repeatable: true,
+        }
+    }
+
+    /// A command that must be sent at most once.
+    pub fn once(id: MavCmd, params: [f32; 7]) -> Command {
+        Command {
+            id,
+            params,
+            repeatable: false,
+        }
+    }
+}
+
 
 #[derive(Debug, Error)]
 pub enum LinkError {
@@ -125,7 +146,7 @@ impl Link {
         message_id: u32,
         count: usize,
     ) -> Result<Vec<MavMessage>, LinkError> {
-        let request = Command
+        let request = Command::repeatable()
 
     }
 }
