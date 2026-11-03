@@ -10,6 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep, timeout};
 use tracing::{debug, warn};
+use mavlink::peek_reader::PeekReader;
 use mavlink::{MavHeader, Message, read_any_msg, write_v2_msg};
 use mavlink::dialects::common::{
     COMMAND_LONG_DATA, HEARTBEAT_DATA, MavAutopilot, MavCmd, MavMessage, MavModeFlag,
@@ -48,7 +49,7 @@ pub struct Link {
 
 impl Link {
     /// Opens a UDP socket towards the camera and starts the two background tasks.
-    pub async fn open(address: SocketAddr, camera: CameraId) {
+    pub async fn open(address: SocketAddr, camera: CameraId) -> io::Result<Link> {
         let local = if address.is_ipv4() {"0.0.0.0:0"} else {"[::]:0"};
         let socket = UdpSocket::bind(local).await?;
         socket.connect(address).await?;
@@ -64,7 +65,13 @@ impl Link {
         let last_heard = Arc::new(Mutex::new(None));
 
         let tasks = vec![
-            tokio::spawn(send_heartbeats())
+            tokio::spawn(send_heartbeats(outbox.clone())),
+            tokio::spawn(receive(
+                outbox.socket.clone(),
+                camera,
+                incoming.clone(),
+                last_heard.clone()
+            ))
         ]
     }
 }
@@ -124,3 +131,58 @@ async fn send_heartbeats(outbox: OutBox) {
         outbox.send(&heartbeat).await;
     }
 }
+
+/// This is on of our main background tasks. receives datagram messages,
+/// keeps the messages that come from the camera, keeps track of when 
+/// the camera was last time heard, and publishes each message
+async fn receive(
+    socket: Arc<UdpSocket>,
+    camera: CameraId,
+    incoming: broadcast::Sender<MavMessage>,
+    last_heard: Arc<Mutex<Option<Instant>>>,
+) {
+    let mut buffer = [0u8; 2048];
+    loop {
+        let length = match socket.recv(&mut buffer).await {
+            Ok(length) => length,
+            Err(error) => {
+                /// this isn't fatal, the camera might not have started yet
+                debug!("receiving failed: {error}");
+                sleep(Duration::from_millis(100).await);
+                continue;
+            }
+        };
+        for (header, message) = in decode(&buffer[..length]) {
+            if header.system_id != camera.system_id || header.component_id != camera.component_id {
+                // another mavlink component, not our camera 
+                continue;
+            }
+            *last_heard.lock().expect("last_heard locked") = Some(Instant::now());
+            // and lastly we publish the message to the incoming channel,so every task that 
+            // is subscribed to that channel can read it
+            let _ = incoming.send(message);
+        }
+    }
+}
+
+fn decode(datagram: &[u8]) -> Vec(MavHeader, MavMessage)> {
+    // wrap the datagram byte
+    // PeekReader, doesn't read and move the bookmark like normal reading
+    // it checks/wraps the whole thing that we want to read without moving the bookmark
+    let mut reader = PeekReader::new(datagram);
+    let mut messages = Vec::new();
+    
+    // the simulators always post one frame per datagram,
+    // so the loop runs once and the Vec messages holds one
+    //message
+    // Although, we loop and use a Vec because there is a case 
+    // that one datagram may contain several frames, back to back
+    loop {
+        match read_any_msg::<MavMessage, _>(&mut reader) {
+            Ok(message) => messages.push(message),
+            rr(MessageReadError::Parse(error)) => debug!("skipping a MAVLink frame: {error}"),
+            // The reader ran out of bytes: we've seen the whole datagram.
+            Err(MessageReadError::Io(_)) => return messages,
+        }
+    }
+} 
