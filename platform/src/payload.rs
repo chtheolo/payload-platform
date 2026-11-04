@@ -84,16 +84,15 @@ async fn run(
     mut queue: mpsc::Receiver<Job>,
     publisher: watch::Sender<Snapshot>,
 ) -> Result<(), ConnectError> {
-    info!("run() is running");
     let mut driver = connect(uri).await?;
-    Ok(());
+    Ok(())
 }
 
 // we are using Box, which is a pointer to the heap
 // it makes only sense to use it when we don't know the size of the value
 async fn connect(uri: CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
     loop {
-        info!("Loop running - trying to connect to camera hardware");
+        info!("trying to connect to camera hardware...");
         match drivers::connect(&uri).await {
             Ok(driver) => return Ok(driver),
             Err(ConnectError::NoAnswer(reason)) => {
