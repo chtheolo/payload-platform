@@ -3,12 +3,14 @@
 
 mod mavlink;
 
-use crate::error::{ConnectError, DriverError};
-use crate::uri::{CameraUri};
-use crate::model::{Property, Action, Value, Identity};
-
+use std::collections::BTreeMap;
 use std::time::Duration;
-use std::collections::{BTreeMap};
+
+use async_trait::async_trait;
+
+use crate::error::{ConnectError, DriverError};
+use crate::model::{Action, Identity, Property, Value};
+use crate::uri::CameraUri;
 
 pub trait Driver: Send {
     /// who the camera is
@@ -44,5 +46,4 @@ pub async fn connect(uri: &CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
             "unknown camera URI scheme `{other}`; known schemes: mavlink"
         ))),
     }
-
 }
