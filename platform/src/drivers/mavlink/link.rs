@@ -1,22 +1,25 @@
 //! A MAVLink 2 connection to one camera over UDP.
 
-use std::time::{Duration, Instant};
+use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-// use tokio::sync::broadcast;
-// use tokio::sync::broadcast::error:RecvError;
-use tokio::sync::broadcast{self, error:RecvError};
-use tokio::net::UdpSocket;
-use tokio::task::JoinHandle;
-use tokio::time::{interval, sleep, timeout};
-use tracing::{debug, warn};
-use mavlink::peek_reader::PeekReader;
-use mavlink::{MavHeader, Message, read_any_msg, write_v2_msg};
 use mavlink::dialects::common::{
     COMMAND_LONG_DATA, HEARTBEAT_DATA, MavAutopilot, MavCmd, MavMessage, MavModeFlag,
     MavParamExtType, MavResult, MavState, MavType, PARAM_EXT_REQUEST_READ_DATA,
     PARAM_EXT_SET_DATA, ParamAck,
 };
+use mavlink::error::MessageReadError;
+use mavlink::peek_reader::PeekReader;
+use mavlink::{MavHeader, Message, read_any_msg, write_v2_msg};
+use thiserror::Error;
+use tokio::net::UdpSocket;
+use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::task::JoinHandle;
+use tokio::time::{interval, sleep, timeout};
+use tracing::{debug, warn};
 
 /// Our own MAVLink address. We are on the same drone as the camera, so we use its system id;
 /// component 191 is MAV_COMP_ID_ONBORAD_COMPUTER
@@ -100,7 +103,7 @@ impl Link {
         let socket = UdpSocket::bind(local).await?;
         socket.connect(address).await?;
 
-        let outbox = OutBox {
+        let outbox = Outbox {
             socket: Arc::new(socket),
             sequence: Arc::new(AtomicU8::new(0)),
         };
@@ -170,10 +173,12 @@ impl Link {
             let mut pick = |incoming: &MavMessage| {
                 match incoming {
                     MavMessage::COMMAND_ACK(ack) if ack.command == request.id => {
+                        // we only accept, just keep listening
                         let accepted = matches!(
                             ack.result,
                             MavResult::MAV_RESULT_ACCEPTED | MavResult::MAV_RESULT_IN_PROGRESS
                         );
+                        // this means that the camera refused to answer us 
                         if !accepted {
                             refused = Some(ack.result);
                             return Some(());
@@ -185,21 +190,42 @@ impl Link {
                             return Some(());
                         }
                     }
-                    _ => {} // if e.g. it's a heartbeat we will fall here and ignore it 
+                    _ => {} // ignore other messages, if e.g. it's a heartbeat we will fall here and ignore it 
                 }
                 None
             };
-
-            self.attempt(&self.command_long(&request, attempt), pick)
+            self.attempt(&self.command_long(&request, attempt), &mut pick).await;
+            if let Some(result) = refused {
+                return Err(LinkError::Refused(result));
+            }
+            if found.len() == count {
+                return Ok(found);
+            }
         }
+        Err(LinkError::Timeout)
     }
 
     async fn attempt<T>(
         &self,
         message: &MavMessage,
-        pick: &mut impl 
-    ) {
-
+        pick: &mut impl FnMut(&MavMessage) -> Option<T>,
+    ) -> Option<T> {
+        // subscribe before sending, avoiding missing quick responses
+        let mut messages = self.incoming.subscribe();
+        self.outbox.send(message).await;
+        let answer = async {
+            while let Some(incoming) = next(&mut messages).await {
+                if let Some(answer) = pick(&incoming) {
+                    return Some(answer);
+                }
+            }
+            None
+        };
+        // from the answer() we return Option<T>, but timeout adds another layer
+        // so we get Result<Option<T>, Elapsed>.
+        // ok() turns the result into an Option. so Option<Option<T>>, 
+        // flatten() will give us the Option<T>(merges) - Some(value) or None
+        timeout(ATTEMPT_TIMEOUT, answer).await.ok().flatten()
     }
 
     /**
@@ -237,7 +263,7 @@ struct Outbox {
     sequence: Arc<AtomicU8>,
 }
 
-impl OutBox {
+impl Outbox {
     /// Encodes `message` as one Mavlink frame and we send it.
     async fn send(&self, message: &MavMessage) {
         let header = MavHeader {
@@ -261,7 +287,7 @@ impl OutBox {
     }
 }
 
-async fn send_heartbeats(outbox: OutBox) {
+async fn send_heartbeats(outbox: Outbox) {
     /// we create the heartbeat mavLink message
     let heartbeat = MavMessage::HEARTBEAT(
         HEARTBEAT_DATA {
@@ -297,11 +323,11 @@ async fn receive(
             Err(error) => {
                 /// this isn't fatal, the camera might not have started yet
                 debug!("receiving failed: {error}");
-                sleep(Duration::from_millis(100).await);
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };
-        for (header, message) = in decode(&buffer[..length]) {
+        for (header, message) in decode(&buffer[..length]) {
             if header.system_id != camera.system_id || header.component_id != camera.component_id {
                 // another mavlink component, not our camera 
                 continue;
@@ -314,7 +340,7 @@ async fn receive(
     }
 }
 
-fn decode(datagram: &[u8]) -> Vec(MavHeader, MavMessage)> {
+fn decode(datagram: &[u8]) -> Vec<(MavHeader, MavMessage)> {
     // wrap the datagram byte
     // PeekReader, doesn't read and move the bookmark like normal reading
     // it checks/wraps the whole thing that we want to read without moving the bookmark
@@ -329,7 +355,7 @@ fn decode(datagram: &[u8]) -> Vec(MavHeader, MavMessage)> {
     loop {
         match read_any_msg::<MavMessage, _>(&mut reader) {
             Ok(message) => messages.push(message),
-            rr(MessageReadError::Parse(error)) => debug!("skipping a MAVLink frame: {error}"),
+            Err(MessageReadError::Parse(error)) => debug!("skipping a MAVLink frame: {error}"),
             // The reader ran out of bytes: we've seen the whole datagram.
             Err(MessageReadError::Io(_)) => return messages,
         }
