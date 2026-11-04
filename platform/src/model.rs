@@ -9,7 +9,7 @@ use std::collections::{BTreeMap};
 use serde::{Deserialize, Serialize, Serializer};
 
 // The ids of the camera. Not enum, cause future camera drivers might add new ids.
-pub mod ids {
+pub mod vocabulary {
     pub const ZOOM: &str = "zoom";
     pub const SENSOR: &str = "sensor";
     pub const THERMAL_PALETTE: &str = "thermal_palette";
@@ -36,7 +36,7 @@ impl Sensor {
     }
 
     pub fn from_name(name: &str) -> Option<Sensor> {
-        Sensor::All.into_iter().find(|sensor| sensor.as_str() == name)
+        Sensor::ALL.into_iter().find(|sensor| sensor.as_str() == name)
     }
 }
 
@@ -170,7 +170,7 @@ impl Snapshot {
         Snapshot {
             identity: None,
             connection: Connection {
-                Status: ConnectionStatus::Connecting,
+                status: ConnectionStatus::Connecting,
                 last_seen: None,
             },
             properties: BTreeMap::new(),
