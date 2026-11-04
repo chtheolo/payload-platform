@@ -6,7 +6,8 @@
  
 use mavlink::dialects::common::{CAMERA_SETTINGS_DATA, VIDEO_STREAM_STATUS_DATA};
 
-// use super::bx20::Bx20;
+use super::bx20::Bx20;
+use super::link::Command;
 use crate::model::Sensor;
 
 /// A camera's zoom limits, as magnification factors.
@@ -26,17 +27,45 @@ pub trait CameraProfile: Send + Sync {
     fn vendor(&self) -> &'static str;
     fn model(&self) -> &'static str;
 
-    // fn zoom_range(&self) -> ZoomRange;
+    fn zoom_range(&self) -> ZoomRange;
     /// The zoom factor in CAMERA_SETTINGS. Models disagree on what `zoomLevel` means.
     fn zoom_from_settings(&self, settings: &CAMERA_SETTINGS_DATA) -> f64;
-    // / The commands that move the zoom from `current` to `target`.
-    // fn zoom_to(&self, current: f64, target: f64) -> Vec<Command>;
+
+    /// The commands that move the zoom from `current` to `target`.
+    fn zoom_to(&self, current: f64, target: f64) -> Vec<Command>;
 
     /// How many VIDEO_STREAM_STATUS messages one request returns: one per video stream.
-    fn stream_count(&self) -> usize;
-    fn sensor_from_streams(&self, streams: &[VIDEO_STREAM_STATUS_DATA]) -> Option<Sensor>;
+    // fn stream_count(&self) -> usize;
+    // fn sensor_from_streams(&self, streams: &[VIDEO_STREAM_STATUS_DATA]) -> Option<Sensor>;
     // fn select_sensor(&self, sensor: Sensor) -> Command;
 
-    /// CAMERA_INFORMATION.firmware_version, decoded the way the vendor documents it.
+    // /// CAMERA_INFORMATION.firmware_version, decoded the way the vendor documents it.
     fn firmware(&self, raw: u32) -> String;
+}
+
+fn all() -> Vec<Box<dyn CameraProfile>>{
+    vec![Box::new(Bx20)]
+}
+
+/// the profile matching the vendor and model names from the CAMERA_INFORMATION
+pub fn detect(vendor: &str, model: &str) -> Option<Box<dyn CameraProfile>> {
+    all()
+        .into_iter()
+        .find(|profile| profile.vendor() == vendor && profile.model() == model)
+}
+
+/// return the camera profile that the user chose if it exists, otherwise None
+pub fn named(name: &str) -> Option<Box<dyn CameraProfile>> {
+    all()
+        .into_iter()
+        .find(|profile| profile.name() == name)
+}
+
+/// helper function that returns all the profile names in string , usually for debug messages
+pub fn names() -> String {
+    all()
+        .iter()
+        .map(|profile| profile.name())
+        .collect::<Vec<_>>()    // the type is Vec<&'static str> but _ autofill it
+        .join(", ")
 }
