@@ -1,20 +1,26 @@
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
+use std::time::{Duration, SystemTime};
 
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+use tokio::time::{MissedTickBehavior, interval, sleep, timeout};
 use tracing::{info, warn};
 
-
-
-use crate::uri::{CameraUri};
 use crate::drivers::{self, Driver};
-use crate::error::{PayloadError, ConnectError};
+use crate::error::{ConnectError, PayloadError};
 use crate::model::{
     ConnectionStatus, Kind, Property, Reading, Snapshot, Timestamp, Value,
 };
+use crate::uri::CameraUri;
 
+// README, "Timing and liveness".
 const QUEUE_LENGTH: usize = 16;
-const RECONNECT_PERIOD: u8 = 10;
+const REQUEST_DEADLINE: Duration = Duration::from_secs(5);
+const POLL_PERIOD: Duration = Duration::from_secs(1);
+const OFFLINE_AFTER: Duration = Duration::from_secs(3);
+const RECONNECT_PERIOD: Duration = Duration::from_secs(2);
+
 
 enum Job {
     Write {
@@ -48,34 +54,58 @@ impl PayloadHandle {
         self.snapshot.borrow().clone()
     }
 
-    // this way the http will hold the lock until we return the answer back
-    // in the meantime the core, couldn't be able to update the Snapshot
-    // pub fn snapshot(&self) -> watch::Ref<'_, Snapshot> {
-    //     self.snapshot.borrow()
-    // }
+    /// Sets a property (`PUT /v1/payload/properties/{id}`).
+    pub async fn write(&self, property: &str, value: Value) -> Result<Property, PayloadError> {
+        let snapshot = self.snapshot();
+        ensure_online(&snapshot)?;
+        let current = snapshot.properties.get(property).ok_or_else(|| {
+            PayloadError::NotFound(format!("this payload has no property `{property}`"))
+        })?;
+        if !current.writable {
+            return Err(PayloadError::ReadOnly(property.to_string()));
+        }
+        let value = check(property, &current.kind, value)?;
 
-    // pub async fn write(&self, property: &str, value: Value) -> Result<Property, PayloadError> {
+        // make a pair : sender + receiver
+        let (answer, reply) = oneshot::channel(); // 
+        self.submit(Job::Write {
+            property: property.to_string(),
+            value,
+            answer,
+        })?;
+        wait(reply).await
+    }
 
-    // }
 
-    // pub async fn invoke(
-    //     &self,
-    //     action: &str,
-    // )
+    pub async fn invoke() {
+        todo()
+    }
+
+    /// Queues a Job. `try_send` never waits, if the queue is full it answers `BUSY` and we send back an Error
+    fn submit(&self, job: Job) -> Result<(), PayloadError> {
+        // jobs: mpsc::Sender::try_send()
+        match self.jobs.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(PayloadError::Busy),
+            Err(TrySendError::Closed(_)) => Err(stopped()),
+        }
+    }
 }
 
+/// starts the core for the camera at `uri`
 pub fn start(uri: CameraUri) -> (PayloadHandle, JoinHandle<Result<(), ConnectError>>) {
     // jobs: mpsc::Sender<Job>
     // queue: mpsc::Receiver<Job>
-    // we set a limit in case camera hang and GCS keeps sending commands
+    // The job queue: we set a limit in case camera hang and GCS keeps sending commands, created once
     let (jobs, queue) = mpsc::channel(QUEUE_LENGTH);
+
     // a watch channel holds exactly one value, the latest snapshot
     // publisher: watch::Sender<Snapshot>
     // snapshot: watch::Receiver<Snapshot>
     let (publisher, snapshot) = watch::channel(Snapshot::connecting());
 
+    // the CORE Task starts here for us
     let task = tokio::spawn(run(uri, queue, publisher));
-    info!("run() has been called here");
     (PayloadHandle {jobs, snapshot}, task)
 }
 
@@ -84,7 +114,25 @@ async fn run(
     mut queue: mpsc::Receiver<Job>,
     publisher: watch::Sender<Snapshot>,
 ) -> Result<(), ConnectError> {
-    let mut driver = connect(uri).await?;
+    let mut driver = connect(uri).await?;       // connect to the camera, with retries 
+
+    // publish who the camera is and what it can do
+    publisher.send_modify(|snapshot| {
+        snapshot.identity = 
+    })
+
+    let mut poll = interval(POLL_PERIOD);
+    // if a slow command makes us miss ticks, dont fire them all at once afterwards
+    poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        // select! waits for whichever comes first, a job or the next poll tick.
+        tokio::select! {
+            job = queue.recv() => match job {
+                Some(job) => handle()
+            }
+        }
+    }
     Ok(())
 }
 
@@ -96,11 +144,62 @@ async fn connect(uri: CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
         match drivers::connect(&uri).await {
             Ok(driver) => return Ok(driver),
             Err(ConnectError::NoAnswer(reason)) => {
-                warn!("{reason}; no retrying ");
-                // warn!("{reason}; retrying in {}s", RECONNECT_PERIOD.as_secs());
+                warn!("{reason}; retrying in {}s", RECONNECT_PERIOD.as_secs());
+                sleep(RECONNECT_PERIOD).await;
             }
             Err(fatal) => return Err(fatal),
         }
     }
+}
 
+/// Validation step: Check if this value is allowed for this property
+fn check(name: &str, kind: &Kind, value: Value) -> Result<Value, PayloadError> {
+    match (kind, value) {
+        (
+            Kind::Number {
+                minimum,
+                maximum,
+                resolution,
+                ..      // ignore other fields, unit
+            },
+            Value::Number(number),
+        ) => {
+            if number < *minimum || number > *maximum {
+                return Err(PayloadError::OutOfRange {
+                    property: name.to_string(),
+                    minimum: *minimum,
+                    maximum: *maximum,
+                });
+            }
+            Ok(Value::Number(round_to(number, *resolution)))
+        }
+        (Kind::Enum { options }, Value::Text(text)) => {
+            if options.contains(&text) {
+                Ok(Value::Text(text))
+            }
+            else {
+                Err(PayloadError::UnsupportedValue {
+                    property: name.to_string(),
+                    value: text,
+                    options: options.clone(),
+                })
+            }
+        }
+        (Kind::Number { .. }, _) => Err(PayloadError::InvalidRequest(format!(
+            "`{name}` takes a number"
+        ))),
+        (Kind::Enum { options }, _) => Err(PayloadError::InvalidRequest(format!(
+            "`{name}` takes one of: {}",
+            options.join(", ")
+        ))),
+    }
+}
+
+/// Quick check before we send a command. Is the camera online?
+fn ensure_online(snapshot: &Snapshot) -> Result<(), PayloadError> {
+    if snapshot.connection.status == ConnectionStatus::Online {
+        Ok(())
+    } else {
+        Err(PayloadError::PayloadOffline)
+    }
 }
