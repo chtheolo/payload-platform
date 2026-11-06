@@ -101,7 +101,7 @@ impl PayloadError {
     }
 }
 
-/// Rust: implementing `From` lets the `?` operator turn a `DriverError` into a
+/// implementing `From` lets the `?` operator turn a `DriverError` into a
 /// `PayloadError` by itself.
 impl From<DriverError> for PayloadError {
     fn from(error: DriverError) -> PayloadError {
