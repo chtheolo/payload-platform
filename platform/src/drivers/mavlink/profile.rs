@@ -32,6 +32,8 @@ pub trait CameraProfile: Send + Sync {
     fn zoom_from_settings(&self, settings: &CAMERA_SETTINGS_DATA) -> f64;
 
     /// The commands that move the zoom from `current` to `target`.
+    /// we return a vecto cause different cameras have different number of commands
+    // 1 for bx20 3 for vlr10
     fn zoom_to(&self, current: f64, target: f64) -> Vec<Command>;
 
     /// How many VIDEO_STREAM_STATUS messages one request returns: one per video stream.
