@@ -122,10 +122,12 @@ async fn run(
 ) -> Result<(), ConnectError> {
     let mut driver = connect(uri).await?;       // connect to the camera, with retries 
 
-    // publish who the camera is and what it can do
+    // Publish who the camera is and what it can do. The values follow with the first poll.
     publisher.send_modify(|snapshot| {
-        snapshot.identity = 
-    })
+        snapshot.identity = Some(driver.identity());
+        snapshot.properties = driver.properties();
+        snapshot.actions = driver.actions();
+    });
 
     let mut poll = interval(POLL_PERIOD);
     // if a slow command makes us miss ticks, dont fire them all at once afterwards
