@@ -147,6 +147,30 @@ impl Link {
         }
     }
 
+    /// Sends a command and returns the result from its COMMAND_ACK.
+    ///
+    /// A repeatable command gets up to `ATTEMPTS` tries. Each resend increments the
+    /// `confirmation` field, as the MAVLink command protocol asks, so the camera can tell a
+    /// resend from a new command.
+    pub async fn command(&self, command: &Command) -> Result<MavResult, LinkError> {
+        let attempts = if command.repeatable { ATTEMPTS } else { 1 };
+        self.ask(
+            attempts,
+            |attempt| self.command_long(command, attempt),
+            |incoming| match incoming {
+                // IN_PROGRESS isn't the final answer; keep waiting for that.
+                MavMessage::COMMAND_ACK(ack)
+                    if ack.command == command.id
+                        && ack.result != MavResult::MAV_RESULT_IN_PROGRESS =>
+                {
+                    Some(ack.result)
+                }
+                _ => None,
+            },
+        )
+        .await
+    }
+
     // This the function that we ask data from the camera 
     // cameras will not send their state, only heartbeats. So, if we want 
     // to know the zoom, the sensor or the camera's name, we have to ask.
@@ -200,6 +224,24 @@ impl Link {
             }
             if found.len() == count {
                 return Ok(found);
+            }
+        }
+        Err(LinkError::Timeout)
+    }
+
+    /// Up to `attempts` tries of: send this attempt's message, then wait for an answer.
+    ///
+    /// Rust: `impl Fn(u8) -> MavMessage` and `impl FnMut(&MavMessage) -> Option<T>` accept
+    /// closures. `FnMut` means the closure may change variables it has captured.
+    async fn ask<T>(
+        &self,
+        attempts: u8,
+        message_for: impl Fn(u8) -> MavMessage,
+        mut pick: impl FnMut(&MavMessage) -> Option<T>,
+    ) -> Result<T, LinkError> {
+        for attempt in 0..attempts {
+            if let Some(answer) = self.attempt(&message_for(attempt), &mut pick).await {
+                return Ok(answer);
             }
         }
         Err(LinkError::Timeout)
