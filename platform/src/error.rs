@@ -1,9 +1,10 @@
-//! - The platform's errors in two layers:
-//! 
-//! - `DriverError` and `ConnectError`: what driver reports to core
-//! - `PAyloadError`: what the GCS receives and `api.rs` decides which HTTP
-//! status each one gets
+//! The platform's errors, in two layers:
+//!
+//! - `DriverError` and `ConnectError`: what a driver reports to the core;
+//! - `PayloadError`: what the GCS receives (README, "Errors"). `api.rs` decides which HTTP
+//!   status each one gets, so this file stays free of HTTP.
 
+use serde_json::json;
 use thiserror::Error;
 
 /// What can go wrong while a driver talks to its camera.
@@ -33,6 +34,7 @@ pub enum ConnectError {
     Fatal(String),
 }
 
+/// The errors the GCS can receive. Each variant is one `code` of the README's error table.
 #[derive(Debug, Error)]
 pub enum PayloadError {
     #[error("{0}")]
@@ -70,10 +72,10 @@ impl PayloadError {
     /// The machine-readable `code` from the README's error table.
     pub fn code(&self) -> &'static str {
         match self {
-            PayloadError::InvalidRequest(_) => "invalid_request",
+            PayloadError::InvalidRequest(_) => "invalid_request",               // we ingonre what ever string someone pass
             PayloadError::NotFound(_) => "not_found",
             PayloadError::ReadOnly(_) => "read_only",
-            PayloadError::UnsupportedValue { .. } => "unsupported_value",
+            PayloadError::UnsupportedValue { .. } => "unsupported_value",       // { .. } struct variant that we don't care about the fields
             PayloadError::OutOfRange { .. } => "out_of_range",
             PayloadError::Rejected(_) => "rejected",
             PayloadError::PayloadOffline => "payload_offline",
@@ -83,13 +85,6 @@ impl PayloadError {
         }
     }
 
-// {
-//   "error": {
-//     "code": "unsupported_value",
-//     "message": "`thermal_palette` doesn't support `lava`",
-//     "details": { "property": "thermal_palette", "options": ["white_hot", "black_hot", "ironbow", "rainbow"] }
-//   }
-// }
     /// Extra fields that help the GCS react, such as the allowed range.
     pub fn details(&self) -> Option<serde_json::Value> {
         match self {
@@ -102,6 +97,19 @@ impl PayloadError {
                 maximum,
             } => Some(json!({ "property": property, "minimum": minimum, "maximum": maximum })),
             _ => None,
+        }
+    }
+}
+
+/// Rust: implementing `From` lets the `?` operator turn a `DriverError` into a
+/// `PayloadError` by itself.
+impl From<DriverError> for PayloadError {
+    fn from(error: DriverError) -> PayloadError {
+        match error {
+            DriverError::Rejected(reason) => PayloadError::Rejected(reason),
+            DriverError::Busy => PayloadError::Busy,
+            DriverError::Timeout => PayloadError::Timeout,
+            DriverError::Internal(reason) => PayloadError::Internal(reason),
         }
     }
 }
