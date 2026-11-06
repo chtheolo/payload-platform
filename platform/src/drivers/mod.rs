@@ -12,6 +12,7 @@ use crate::error::{ConnectError, DriverError};
 use crate::model::{Action, Identity, Property, Value};
 use crate::uri::CameraUri;
 
+#[async_trait]
 pub trait Driver: Send {
     /// who the camera is
     fn identity(&self) -> Identity;
