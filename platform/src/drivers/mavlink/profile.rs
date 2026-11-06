@@ -37,9 +37,9 @@ pub trait CameraProfile: Send + Sync {
     fn zoom_to(&self, current: f64, target: f64) -> Vec<Command>;
 
     /// How many VIDEO_STREAM_STATUS messages one request returns: one per video stream.
-    // fn stream_count(&self) -> usize;
-    // fn sensor_from_streams(&self, streams: &[VIDEO_STREAM_STATUS_DATA]) -> Option<Sensor>;
-    // fn select_sensor(&self, sensor: Sensor) -> Command;
+    fn stream_count(&self) -> usize;
+    fn sensor_from_streams(&self, streams: &[VIDEO_STREAM_STATUS_DATA]) -> Option<Sensor>;
+    fn select_sensor(&self, sensor: Sensor) -> Command;
 
     // /// CAMERA_INFORMATION.firmware_version, decoded the way the vendor documents it.
     fn firmware(&self, raw: u32) -> String;
