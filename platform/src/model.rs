@@ -45,7 +45,7 @@ impl Sensor {
 #[serde(untagged)]
 pub enum Value {
     Number(f64),
-    Value(String),
+    Text(String),
 }
 
 /// Rounds `value` to a multiple of `resolution`: 4.04 becomes 4.0 for a resolution of 0.1.
@@ -105,14 +105,6 @@ pub struct Connection {
     pub last_seen: Option<Timestamp>,
 }
 
-
-// Keep a state of a value and when it was read 
-#[derive(Debug, Clone, Serialize)]
-pub struct Reading {
-    pub value: Value,
-    pub observed_at: Timestamp,
-}
-
 /// What kind of values a property, or an action argument, accepts 
 /// 
 /// zoom : Kind::Number = unit, min 1, max 30, resolution 0.1
@@ -130,6 +122,13 @@ pub enum Kind {
     Enum {
         options: Vec<String>,
     },
+}
+
+// Keep a state of a value and when it was read 
+#[derive(Debug, Clone, Serialize)]
+pub struct Reading {
+    pub value: Value,
+    pub observed_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Serialize)]
