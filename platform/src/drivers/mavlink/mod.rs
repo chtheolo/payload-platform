@@ -13,7 +13,7 @@ use self::link::{CameraId, Command, Link, LinkError};
 use self::profile::CameraProfile;
 use super::Driver;
 use crate::error::{ConnectError, DriverError};
-use crate::model::{Action, Identity, Kind, Property, Sensor, Value, vocabulary};
+use crate::model::{Action, Identity, Kind, Property, Sensor, Value, round_to, vocabulary};
 use crate::uri::{CameraUri, UriError};
 
 

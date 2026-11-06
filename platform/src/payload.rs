@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use crate::drivers::{self, Driver};
 use crate::error::{ConnectError, PayloadError};
 use crate::model::{
-    ConnectionStatus, Kind, Property, Reading, Snapshot, Timestamp, Value,
+    ConnectionStatus, Kind, Property, Reading, Snapshot, Timestamp, Value, round_to,
 };
 use crate::uri::CameraUri;
 
