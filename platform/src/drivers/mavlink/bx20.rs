@@ -68,6 +68,37 @@ impl CameraProfile for Bx20 {
         )]
     }
 
+    fn stream_count(&self) -> usize {
+        1 // a single stream, "main" (ICD 6.3)
+    }
+
+    fn select_sensor(&self, sensor: Sensor) -> Command {
+        // MAV_CMD_SET_CAMERA_SOURCE (ICD 5.3): param1 0 means "all cameras", param2 is the
+        // primary source, and param3, the secondary source, must stay 0 (no picture-in-picture).
+        let source = match sensor {
+            Sensor::Visible => CameraSource::CAMERA_SOURCE_RGB,
+            Sensor::Thermal => CameraSource::CAMERA_SOURCE_IR,
+        };
+        Command::repeatable(
+            MavCmd::MAV_CMD_SET_CAMERA_SOURCE,
+            [0.0, source as u32 as f32, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+    }
+
+    fn sensor_from_streams(&self, streams: &[VIDEO_STREAM_STATUS_DATA]) -> Option<Sensor> {
+        // The single stream carries the THERMAL flag while the thermal sensor feeds it (ICD 6.3).
+        // Rust: `?` on an `Option` returns `None` early when there is no first stream.
+        let stream = streams.first()?;
+        let thermal = stream
+            .flags
+            .contains(VideoStreamStatusFlags::VIDEO_STREAM_STATUS_FLAGS_THERMAL);
+        Some(if thermal {
+            Sensor::Thermal
+        } else {
+            Sensor::Visible
+        })
+    }
+
     fn firmware(&self, raw: u32) -> String {
         // The ICD documents 0x00010000 as "1.0.0.0", which puts the major version in bits
         // 16-23. That matches neither MAVLink's documented layout nor the VLR-10's, which is
@@ -76,11 +107,36 @@ impl CameraProfile for Bx20 {
         let byte = |shift: u32| (raw >> shift) & 0xff;
         format!("{}.{}.{}.{}", byte(16), byte(8), byte(0), byte(24))
     }
+}
 
-    // fn stream_count(&self) -> usize {
-    //     1 // a single stream, "main" (ICD 6.3)
-    // }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // fn sensor_from_streams(&self, streams: &)
+    fn settings(zoom_level: f32) -> CAMERA_SETTINGS_DATA {
+        // Rust: `..Default::default()` fills every field not named here with its default.
+        CAMERA_SETTINGS_DATA {
+            zoomLevel: zoom_level,
+            ..Default::default()
+        }
+    }
 
+    #[test]
+    fn zoom_level_is_a_percentage_of_the_range() {
+        // The ICD's start-up example: zoomLevel 50 means 10.5x.
+        assert_eq!(Bx20.zoom_from_settings(&settings(50.0)), 10.5);
+    }
+
+    #[test]
+    fn zoom_to_sends_a_range_percentage() {
+        let commands = Bx20.zoom_to(1.0, 10.5);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].params[0], 2.0); // ZOOM_TYPE_RANGE
+        assert_eq!(commands[0].params[1], 50.0);
+    }
+
+    #[test]
+    fn firmware_reads_as_the_icd_says() {
+        assert_eq!(Bx20.firmware(0x0001_0000), "1.0.0.0");
+    }
 }
