@@ -635,6 +635,7 @@ dependencies = [
  "humantime",
  "mavlink",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-trait = "0.1.92"
-axum = "0.8.9"
-clap = { version = "4.6.7", features = ["derive"] }
-humantime = "2.4.0"
-mavlink = { version = "0.18.0", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions"] }
-serde = { version = "1.0.229", features = ["derive"] }
-thiserror = "2.0.21"
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
-tracing = "0.1.44"
+async-trait = "0.1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+humantime = "2"
+mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-url = "2.5.8"
+url = "2"
