@@ -82,9 +82,42 @@ impl PayloadHandle {
         wait(reply).await // wait for the reply
     }
 
+    /// Runs an action (`POST /v1/payload/actions/{id}`).
+    pub async fn invoke(
+        &self,
+        action: &str,
+        arguments: BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Reading>, PayloadError> {
+        let snapshot = self.snapshot();
+        ensure_online(&snapshot)?;
+        let described = snapshot.actions.get(action).ok_or_else(|| {
+            PayloadError::NotFound(format!("this payload has no action `{action}`"))
+        })?;
+        // Every argument must be one the action takes...
+        if let Some(unknown) = arguments
+            .keys()
+            .find(|name| !described.parameters.contains_key(*name))
+        {
+            return Err(PayloadError::InvalidRequest(format!(
+                "`{action}` has no argument `{unknown}`"
+            )));
+        }
+        // ...and every parameter must be given, with a valid value.
+        let mut checked = BTreeMap::new();
+        for (name, kind) in &described.parameters {
+            let value = arguments.get(name).cloned().ok_or_else(|| {
+                PayloadError::InvalidRequest(format!("`{action}` needs the argument `{name}`"))
+            })?;
+            checked.insert(name.clone(), check(name, kind, value)?);
+        }
 
-    pub async fn invoke() {
-        todo()
+        let (answer, reply) = oneshot::channel();
+        self.submit(Job::Invoke {
+            action: action.to_string(),
+            arguments: checked,
+            answer,
+        })?;
+        wait(reply).await
     }
 
     /// Queues a Job. `try_send` never waits, if the queue is full it answers `BUSY` and we send back an Error
@@ -284,4 +317,46 @@ async fn wait<T>(reply: oneshot::Receiver<Result<T, PayloadError>>) -> Result<T,
 
 fn stopped() -> PayloadError {
     PayloadError::Internal("the payload core has stopped".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zoom() -> Kind {
+        Kind::Number {
+            unit: "x".into(),
+            minimum: 1.0,
+            maximum: 20.0,
+            resolution: 0.1,
+        }
+    }
+
+    #[test]
+    fn numbers_are_rounded_to_the_resolution() {
+        let checked = check("zoom", &zoom(), Value::Number(4.04)).unwrap();
+        assert_eq!(checked, Value::Number(4.0));
+    }
+
+    #[test]
+    fn numbers_out_of_range_are_refused() {
+        let checked = check("zoom", &zoom(), Value::Number(25.0));
+        assert!(matches!(checked, Err(PayloadError::OutOfRange { .. })));
+    }
+
+    #[test]
+    fn enum_values_must_be_offered() {
+        let palette = Kind::Enum {
+            options: vec!["white_hot".into(), "ironbow".into()],
+        };
+        assert!(check("thermal_palette", &palette, Value::Text("ironbow".into())).is_ok());
+        let lava = check("thermal_palette", &palette, Value::Text("lava".into()));
+        assert!(matches!(lava, Err(PayloadError::UnsupportedValue { .. })));
+    }
+
+    #[test]
+    fn a_wrong_type_is_an_invalid_request() {
+        let checked = check("zoom", &zoom(), Value::Text("ten".into()));
+        assert!(matches!(checked, Err(PayloadError::InvalidRequest(_))));
+    }
 }
