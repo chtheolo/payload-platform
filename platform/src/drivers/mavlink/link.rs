@@ -108,8 +108,8 @@ impl Link {
             sequence: Arc::new(AtomicU8::new(0)),
         };
 
-        /// broadcasting the messages to every subscriber. 64 is the size of our buffer
-        /// number of messages
+        // broadcasting the messages to every subscriber. 64 is the size of our buffer
+        // number of messages
         let (incoming, _) = broadcast::channel(64);
         let last_heard = Arc::new(Mutex::new(None));
 
@@ -186,12 +186,10 @@ impl Link {
         message_id: u32,
         count: usize,
     ) -> Result<Vec<MavMessage>, LinkError> {
-        /**
-         * MAV_CMD_REQUEST_MESSAGE (512) defines its 7 parameters like this in the MAVLink standard:
-         * 1    |  ID of the message you want               | message_id(259=CAMERA_INFORMATION)
-         * 2-6  | extra options(e.g. which streams)         | 0.0 not used
-         * 7    | where to send reply: 0(default), 2(bcast) | 0.0 = us
-         */
+        // MAV_CMD_REQUEST_MESSAGE (512) defines its 7 parameters like this in the MAVLink standard:
+        // 1    |  ID of the message you want               | message_id(259=CAMERA_INFORMATION)
+        // 2-6  | extra options(e.g. which streams)         | 0.0 not used
+        // 7    | where to send reply: 0(default), 2(bcast) | 0.0 = us
         let request = Command::repeatable(
             MavCmd::MAV_CMD_REQUEST_MESSAGE,
             [message_id as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -397,7 +395,7 @@ impl Outbox {
 }
 
 async fn send_heartbeats(outbox: Outbox) {
-    /// we create the heartbeat mavLink message
+    // we create the heartbeat mavLink message
     let heartbeat = MavMessage::HEARTBEAT(
         HEARTBEAT_DATA {
             custom_mode: 0,
@@ -430,7 +428,7 @@ async fn receive(
         let length = match socket.recv(&mut buffer).await {
             Ok(length) => length,
             Err(error) => {
-                /// this isn't fatal, the camera might not have started yet
+                // this isn't fatal, the camera might not have started yet
                 debug!("receiving failed: {error}");
                 sleep(Duration::from_millis(100)).await;
                 continue;

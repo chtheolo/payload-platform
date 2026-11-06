@@ -48,17 +48,16 @@ impl CameraProfile for Bx20 {
     /// returns a list of comands, which the driver sends in order 
     fn zoom_to(&self, _current: f64, target: f64) -> Vec<Command> {
         let percent = (target - 1.0) / (MAX_ZOOM - 1.0)* 100.0;
-        /** 
-         * from official docs from mavlink crate
-         *  enum CameraZoomType {
-         *      ZOOM_TYPE_STEP = 0,          // "zoom in/out by N steps"
-         *      ZOOM_TYPE_CONTINUOUS = 1,    // "keep zooming in/out until told to stop
-         *      ZOOM_TYPE_RANGE = 2,         // "go to N % of the range"   ← what the BX-20 uses"
-         *      ZOOM_TYPE_FOCAL_LENGTH = 3,  // "go to this focal length in mm"
-         *      …
-         * }
-         * so we do first type cast for converting enum to int and then int to float
-         * */
+        // from official docs from mavlink crate
+        //  enum CameraZoomType {
+        //      ZOOM_TYPE_STEP = 0,          // "zoom in/out by N steps"
+        //      ZOOM_TYPE_CONTINUOUS = 1,    // "keep zooming in/out until told to stop
+        //      ZOOM_TYPE_RANGE = 2,         // "go to N % of the range"   ← what the BX-20 uses"
+        //      ZOOM_TYPE_FOCAL_LENGTH = 3,  // "go to this focal length in mm"
+        //      …
+        // }
+        // so we do first type cast for converting enum to int and then int to float
+        //
         let zoom_type = CameraZoomType::ZOOM_TYPE_RANGE as u32 as f32;
 
         // return a vector cause we have of course to align with CameraProfile
