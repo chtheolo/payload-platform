@@ -21,13 +21,19 @@ const POLL_PERIOD: Duration = Duration::from_secs(1);
 const OFFLINE_AFTER: Duration = Duration::from_secs(3);
 const RECONNECT_PERIOD: Duration = Duration::from_secs(2);
 
-
+// two kind of Jobs:
+// 1. "set this property to this value" 
+// PUT /v1/payload/properties/{id} : PUT /v1/payload/properties/zoom {"value": 10.5}
+// 2. "do this action with these arguments
+// POST /v1/payload/actions/{id} : POST /v1/payload/actions/zoom_step {"direction": "in"}
 enum Job {
+    
     Write {
         property: String,
         value: Value,
         answer: oneshot::Sender<Result<Property, PayloadError>>,
     },
+    
     Invoke {
         action: String,
         arguments: BTreeMap<String, Value>,
@@ -67,13 +73,13 @@ impl PayloadHandle {
         let value = check(property, &current.kind, value)?;
 
         // make a pair : sender + receiver
-        let (answer, reply) = oneshot::channel(); // 
+        let (answer, reply) = oneshot::channel();
         self.submit(Job::Write {
             property: property.to_string(),
             value,
             answer,
         })?;
-        wait(reply).await
+        wait(reply).await // wait for the reply
     }
 
 
@@ -129,8 +135,11 @@ async fn run(
         // select! waits for whichever comes first, a job or the next poll tick.
         tokio::select! {
             job = queue.recv() => match job {
-                Some(job) => handle()
-            }
+                Some(job) => handle(job, driver.as_mut(), &publisher).await,
+                // Every handle is gone: the platform is shutting down.
+                None => return Ok(()),
+            },
+            _ = poll.tick() => refresh(driver.as_mut(), &publisher).await,
         }
     }
     Ok(())
@@ -150,6 +159,64 @@ async fn connect(uri: CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
             Err(fatal) => return Err(fatal),
         }
     }
+}
+
+/// Runs one job on the driver and sends back the answer.
+async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<Snapshot>) {
+    match job {
+        Job::Write {
+            property,
+            value,
+            answer,
+        } => {
+            let result = match driver.write(&property, &value).await {
+                Ok(observed) => {
+                    store(publisher, BTreeMap::from([(property.clone(), observed)]));
+                    // Answer with the whole property, the way `GET` would now show it.
+                    publisher
+                        .borrow()
+                        .properties
+                        .get(&property)
+                        .cloned()
+                        .ok_or_else(|| PayloadError::Internal(format!("`{property}` vanished")))
+                }
+                Err(error) => Err(error.into()),
+            };
+            // Rust: `send` fails if the HTTP request already gave up (its deadline passed).
+            // There's nothing left to do then, so the result is ignored on purpose.
+            let _ = answer.send(result);
+        }
+        Job::Invoke {
+            action,
+            arguments,
+            answer,
+        } => {
+            let result = match driver.invoke(&action, &arguments).await {
+                Ok(changed) => Ok(store(publisher, changed)),
+                Err(error) => Err(error.into()),
+            };
+            let _ = answer.send(result);
+        }
+    }
+}
+
+fn store(
+    publisher: &watch::Sender<Snapshot>,
+    values: BTreeMap<String, Value>,
+) -> BTreeMap<String, Reading> {
+    let now = Timestamp::now();
+    publisher.send_modify(|snapshot| {
+        for (name, value) in &values {
+            if let Some(property) = snapshot.properties.get_mut(name) {
+                property.value = Some(value.clone());
+                property.observed_at = Some(now);
+            }
+        }
+    });
+    values
+        .into_iter()
+        .map(|(name, value)| (name, Reading {value, observed_at: now}))
+        .collect()
 }
 
 /// Validation step: Check if this value is allowed for this property
@@ -202,4 +269,18 @@ fn ensure_online(snapshot: &Snapshot) -> Result<(), PayloadError> {
     } else {
         Err(PayloadError::PayloadOffline)
     }
+}
+
+/// Waits for the core's answer, but never longer than the 5-second deadline.
+async fn wait<T>(reply: oneshot::Receiver<Result<T, PayloadError>>) -> Result<T, PayloadError> {
+    match timeout(REQUEST_DEADLINE, reply).await {
+        Ok(Ok(result)) => result,
+        // The core dropped the job without answering: it has stopped.
+        Ok(Err(_)) => Err(stopped()),
+        Err(_) => Err(PayloadError::Timeout),
+    }
+}
+
+fn stopped() -> PayloadError {
+    PayloadError::Internal("the payload core has stopped".into())
 }
