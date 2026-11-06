@@ -144,7 +144,6 @@ async fn run(
             _ = poll.tick() => refresh(driver.as_mut(), &publisher).await,
         }
     }
-    Ok(())
 }
 
 // we are using Box, which is a pointer to the heap
