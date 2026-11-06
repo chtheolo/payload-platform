@@ -1,27 +1,43 @@
 /// The HTTP layer for GCS commands
 
+use std::collections::BTreeMap;
+
 use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use axum::extract::{Path, State};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-use crate::payload::PayloadHandle;
 use crate::error::PayloadError;
+use crate::model::{Property, Reading, Snapshot, Value};
+use crate::payload::PayloadHandle;
 
 pub fn router(payload: PayloadHandle) -> Router {
     Router::new()
-        .route("/v1/health", get(health_status))
         .route("/v1/payload", get(get_payload))
         .route(
             "/v1/payload/properties/{id}",
             get(get_property).put(put_property),
         )
-        .route("/v1/payload/actions/{id}",post(post_action))
+        // .route("/v1/payload/actions/{id}", post(post_action))
+        // Unknown paths get a JSON error too, instead of an empty 404.
+        .fallback(unknown_path)
+        .with_state(payload)
 }
 
-
-async fn health_status(State(payload): State<PayloadHandle>) -> Json<String> {
-    Json(json!({"status":"running"}))
+/// `PUT /v1/payload/properties/{id}`
+/// e.g. curl -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 10.5}' 
+async fn put_property(
+    State(payload): State<PayloadHandle>,
+    Path(id): Path<String>,
+    body: Result<Json<WriteBody>, JsonRejection>,
+) -> Result<Json<Property>, PayloadError> {
+    let Json(body) = body.map_err(invalid_body)?;
+    let property = payload.write(&id, body.value).await?;
+    Ok(Json(property))
 }
 
 /// `GEt /v1/payload`: everything GCS can know from the latest snapshot
@@ -36,7 +52,7 @@ async fn get_payload(State(payload): State<PayloadHandle>) -> Json<Snapshot> {
 async fn get_property(
     State(payload): State<PayloadHandle>,
     Path(id): Path<String>,
-) -> Result<Json<Property, PayloadError>> {
+) -> Result<Json<Property>, PayloadError> {
     payload
         .snapshot()
         .properties
@@ -62,3 +78,35 @@ async fn get_property(
 
 
 // }
+
+fn invalid_body(rejection: JsonRejection) -> PayloadError {
+    PayloadError::InvalidRequest(rejection.body_text())
+}
+
+async fn unknown_path() -> PayloadError {
+    PayloadError::NotFound("no such path; start with GET /v1/payload".into())
+}
+
+/// How each `PayloadError` looks over HTTP: a status code plus error message
+/// `{"error": {"code", "message", "details"}}`.
+impl IntoResponse for PayloadError {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            PayloadError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            PayloadError::NotFound(_) => StatusCode::NOT_FOUND,
+            PayloadError::ReadOnly(_) => StatusCode::METHOD_NOT_ALLOWED,
+            PayloadError::UnsupportedValue { .. } | PayloadError::OutOfRange { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            PayloadError::Rejected(_) => StatusCode::CONFLICT,
+            PayloadError::PayloadOffline | PayloadError::Busy => StatusCode::SERVICE_UNAVAILABLE,
+            PayloadError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+            PayloadError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let mut error = json!({ "code": self.code(), "message": self.to_string() });
+        if let Some(details) = self.details() {
+            error["details"] = details;
+        }
+        (status, Json(json!({ "error": error }))).into_response()
+    }
+}
