@@ -234,6 +234,37 @@ async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<S
     }
 }
 
+/// Updates the connection status, then re-reads every property while the camera is online.
+async fn refresh(driver: &mut dyn Driver, publisher: &watch::Sender<Snapshot>) {
+    let heard = driver.last_heard();
+    // One rule for every driver (README, "Timing and liveness").
+    let status = match heard {
+        Some(age) if age < OFFLINE_AFTER => ConnectionStatus::Online,
+        _ => ConnectionStatus::Offline,
+    };
+    let previous = publisher.borrow().connection.status;
+    if status != previous {
+        info!("camera is now {status:?}");
+    }
+    publisher.send_modify(|snapshot| {
+        snapshot.connection.status = status;
+        // Turn "heard 0.4 s ago" into a clock time the GCS can show.
+        snapshot.connection.last_seen = heard
+            .and_then(|age| SystemTime::now().checked_sub(age))
+            .map(Timestamp);
+    });
+
+    if status != ConnectionStatus::Online {
+        return; // asking a silent camera would only stack up timeouts
+    }
+    match driver.read().await {
+        Ok(values) => {
+            store(publisher, values);
+        }
+        Err(error) => warn!("reading the camera failed: {error}"),
+    }
+}
+
 fn store(
     publisher: &watch::Sender<Snapshot>,
     values: BTreeMap<String, Value>,
