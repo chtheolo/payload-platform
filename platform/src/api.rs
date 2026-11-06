@@ -59,6 +59,13 @@ async fn get_property(
     //     .get(&id).cloned()
 }
 
+/// The body of `PUT /v1/payload/properties/{id}`: `{"value": ...}`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteBody {
+    value: Value,
+}
+
 /// `PUT /v1/payload/properties/{id}`
 /// e.g. curl -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 10.5}' 
 async fn put_property(
