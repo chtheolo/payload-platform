@@ -48,6 +48,15 @@ pub enum Value {
     Value(String),
 }
 
+/// Rounds `value` to a multiple of `resolution`: 4.04 becomes 4.0 for a resolution of 0.1.
+///
+/// Dividing by `1 / resolution`, instead of multiplying by `resolution`, avoids
+/// floating-point results such as 0.30000000000000004.
+pub fn round_to(value: f64, resolution: f64) -> f64 {
+    let steps_per_unit = 1.0 / resolution;
+    (value * steps_per_unit).round() / steps_per_unit
+}
+
 /// Who the camera is
 #[derive(Debug, Clone, Serialize)]
 pub struct Identity {
@@ -73,7 +82,6 @@ impl Timestamp {
         Timestamp(SystemTime::now())
     }
 }
-
 
 impl Serialize for Timestamp {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -105,7 +113,7 @@ pub struct Reading {
     pub observed_at: Timestamp,
 }
 
-/// What values a property, or an action argument, accepts (README, "Property descriptor").
+/// What kind of values a property, or an action argument, accepts 
 /// 
 /// zoom : Kind::Number = unit, min 1, max 30, resolution 0.1
 /// sensor: Kind::Enum = "visible", "thermal"
