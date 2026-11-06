@@ -23,7 +23,6 @@ pub fn router(payload: PayloadHandle) -> Router {
             get(get_property).put(put_property),
         )
         .route("/v1/payload/actions/{id}", post(post_action))
-        // .route("/v1/payload/actions/{id}", post(post_action))
         // Unknown paths get a JSON error too, instead of an empty 404.
         .fallback(unknown_path)
         .with_state(payload)
