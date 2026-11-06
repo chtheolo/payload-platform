@@ -22,23 +22,13 @@ pub fn router(payload: PayloadHandle) -> Router {
             "/v1/payload/properties/{id}",
             get(get_property).put(put_property),
         )
+        .route("/v1/payload/actions/{id}", post(post_action))
         // .route("/v1/payload/actions/{id}", post(post_action))
         // Unknown paths get a JSON error too, instead of an empty 404.
         .fallback(unknown_path)
         .with_state(payload)
 }
 
-/// `PUT /v1/payload/properties/{id}`
-/// e.g. curl -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 10.5}' 
-async fn put_property(
-    State(payload): State<PayloadHandle>,
-    Path(id): Path<String>,
-    body: Result<Json<WriteBody>, JsonRejection>,
-) -> Result<Json<Property>, PayloadError> {
-    let Json(body) = body.map_err(invalid_body)?;
-    let property = payload.write(&id, body.value).await?;
-    Ok(Json(property))
-}
 
 /// `GEt /v1/payload`: everything GCS can know from the latest snapshot
 async fn get_payload(State(payload): State<PayloadHandle>) -> Json<Snapshot> {
@@ -68,16 +58,35 @@ async fn get_property(
     //     .properties
     //     .get(&id).cloned()
 }
-// async fn post_action(
-//     State(payload): State<PayloadHandle>,
-//     Path(id): Path<String>,
-//     body: Result<Json<BTreeMapM<String, Value>>, JsonRejection>,
-// ) -> Result<Json<, PayloadError> {
-//     let Json(arguments) = body.map_err(invalid_body)?;
-//     let properties = payload.invoke(&id, )
 
+/// `PUT /v1/payload/properties/{id}`
+/// e.g. curl -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 10.5}' 
+async fn put_property(
+    State(payload): State<PayloadHandle>,
+    Path(id): Path<String>,
+    body: Result<Json<WriteBody>, JsonRejection>,
+) -> Result<Json<Property>, PayloadError> {
+    let Json(body) = body.map_err(invalid_body)?;
+    let property = payload.write(&id, body.value).await?;
+    Ok(Json(property))
+}
 
-// }
+/// The answer to an action: the properties it changed.
+#[derive(Serialize)]
+struct ActionReply {
+    properties: BTreeMap<String, Reading>,
+}
+
+/// `POST /v1/payload/actions/{id}`; the body holds the arguments, e.g. `{"direction": "in"}`.
+async fn post_action(
+    State(payload): State<PayloadHandle>,
+    Path(id): Path<String>,
+    body: Result<Json<BTreeMap<String, Value>>, JsonRejection>,
+) -> Result<Json<ActionReply>, PayloadError> {
+    let Json(arguments) = body.map_err(invalid_body)?;
+    let properties = payload.invoke(&id, arguments).await?;
+    Ok(Json(ActionReply { properties }))
+}
 
 fn invalid_body(rejection: JsonRejection) -> PayloadError {
     PayloadError::InvalidRequest(rejection.body_text())
