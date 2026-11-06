@@ -84,3 +84,33 @@ impl CameraUri {
         }
     }
 }
+
+// Rust: `#[cfg(test)]` compiles this module only for `cargo test`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_a_mavlink_uri() {
+        let uri = CameraUri::parse("mavlink://127.0.0.1:14580?profile=bx20").unwrap();
+        assert_eq!(uri.scheme, "mavlink");
+        assert_eq!(uri.host, "127.0.0.1");
+        assert_eq!(uri.port, 14580);
+        assert_eq!(uri.option("profile", "auto".to_string()).unwrap(), "bx20");
+        assert_eq!(uri.option("system_id", 1u8).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_port_is_required() {
+        assert!(matches!(
+            CameraUri::parse("mavlink://127.0.0.1"),
+            Err(UriError::MissingAddress)
+        ));
+    }
+
+    #[test]
+    fn unknown_options_are_refused() {
+        let uri = CameraUri::parse("mavlink://127.0.0.1:14580?profle=bx20").unwrap();
+        assert!(uri.accept_only(&["profile"]).is_err());
+    }
+}
