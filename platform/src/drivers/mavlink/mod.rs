@@ -146,12 +146,25 @@ impl MavlinkDriver {
         Ok(round_to(factor, self.profile.zoom_range().resolution))
     }
 
-    async fn read_sensor() {
-
+    async fn read_sensor(&self) -> Result<Sensor, DriverError> {
+        let count = self.profile.stream_count();
+        let messages = self.link.request_message(VIDEO_STREAM_STATUS, count).await?;
+        // Rust: `filter_map` keeps the `Some`s and drops the `None`s, mapping as it goes.
+        let streams: Vec<_> = messages
+            .iter()
+            .filter_map(|message| match message {
+                MavMessage::VIDEO_STREAM_STATUS(status) => Some(status.clone()),
+                _ => None,
+            })
+            .collect();
+        self.profile
+            .sensor_from_streams(&streams)
+            .ok_or_else(|| DriverError::Internal("expected VIDEO_STREAM_STATUS".into()))
     }
 
-    async fn read_palette() {
-
+    async fn read_palette(&self) -> Result<&'static str, DriverError> {
+        let index = self.link.read_param(PALETTE_PARAM).await?;
+        palette_name(index)
     }
 }
 
@@ -162,15 +175,52 @@ impl Driver for MavlinkDriver {
     }
 
     fn properties(&self) -> BTreeMap<String, Property> {
-        todo!()
+        let zoom = self.profile.zoom_range();
+        let zoom_kind = Kind::Number {
+            unit: "x".into(),
+            minimum: zoom.minimum,
+            maximum: zoom.maximum,
+            resolution: zoom.resolution,
+        };
+        let sensor_kind = Kind::Enum {
+            options: Sensor::ALL.iter().map(|sensor| sensor.as_str().into()).collect(),
+        };
+        let palette_kind = Kind::Enum {
+            options: PALETTES.iter().map(|palette| palette.to_string()).collect(),
+        };
+        BTreeMap::from([
+            (vocabulary::ZOOM.into(), Property::unread(zoom_kind, true)),
+            (vocabulary::SENSOR.into(), Property::unread(sensor_kind, true)),
+            (vocabulary::THERMAL_PALETTE.into(), Property::unread(palette_kind, true)),
+        ])
     }
 
     fn actions(&self) -> BTreeMap<String, Action> {
-        todo!()
+        let direction = Kind::Enum {
+            options: vec!["in".into(), "out".into()],
+        };
+        let zoom_step = Action {
+            parameters: BTreeMap::from([(vocabulary::DIRECTION.into(), direction)]),
+        };
+        BTreeMap::from([(vocabulary::ZOOM_STEP.into(), zoom_step)])
     }
 
     fn last_heard(&self) -> Option<Duration> {
-        todo!()
+        self.link.last_heard()
+    }
+
+    async fn read(&mut self) -> Result<BTreeMap<String, Value>, DriverError> {
+        Ok(BTreeMap::from([
+            (vocabulary::ZOOM.into(), Value::Number(self.read_zoom().await?)),
+            (
+                vocabulary::SENSOR.into(),
+                Value::Text(self.read_sensor().await?.as_str().into()),
+            ),
+            (
+                vocabulary::THERMAL_PALETTE.into(),
+                Value::Text(self.read_palette().await?.into()),
+            ),
+        ]))
     }
 
     async fn write(&mut self, property: &str, value: &Value) -> Result<Value, DriverError> {
@@ -210,6 +260,61 @@ impl Driver for MavlinkDriver {
             ))),
         }
     }
+
+    async fn invoke(
+        &mut self,
+        action: &str,
+        arguments: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, Value>, DriverError> {
+        match action {
+            vocabulary::ZOOM_STEP => {
+                let step = match arguments.get(vocabulary::DIRECTION) {
+                    Some(Value::Text(direction)) if direction == "in" => 1.0,
+                    Some(Value::Text(direction)) if direction == "out" => -1.0,
+                    other => {
+                        return Err(DriverError::Internal(format!(
+                            "bad zoom direction {other:?}"
+                        )));
+                    }
+                };
+                // Both MAVLink cameras step natively, 1x per step, so this lives here rather
+                // than in a profile. A step isn't repeatable: resending a lost one could zoom
+                // twice, so it goes out once.
+                let zoom_type = CameraZoomType::ZOOM_TYPE_STEP as u32 as f32;
+                self.run(Command::once(
+                    MavCmd::MAV_CMD_SET_CAMERA_ZOOM,
+                    [zoom_type, step, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ))
+                .await?;
+                Ok(BTreeMap::from([(
+                    vocabulary::ZOOM.into(),
+                    Value::Number(self.read_zoom().await?),
+                )]))
+            }
+            _ => Err(DriverError::Internal(format!("unknown action `{action}`"))),
+        }
+    }
+}
+
+/// Rust: this `From` lets `?` turn a `LinkError` into a `DriverError` automatically.
+impl From<LinkError> for DriverError {
+    fn from(error: LinkError) -> DriverError {
+        match error {
+            LinkError::Timeout => DriverError::Timeout,
+            LinkError::Refused(MavResult::MAV_RESULT_TEMPORARILY_REJECTED) => DriverError::Busy,
+            LinkError::Refused(result) => {
+                DriverError::Rejected(format!("the camera answered {result:?}"))
+            }
+        }
+    }
+}
+
+fn palette_name(index: u8) -> Result<&'static str, DriverError> {
+    // Rust: `.get()` returns `None` instead of panicking when the index is out of range.
+    PALETTES
+        .get(usize::from(index))
+        .copied()
+        .ok_or_else(|| DriverError::Internal(format!("unknown palette index {index}")))
 }
 
 /// Text from a fixed-size, zero-padded byte array such as CAMERA_INFORMATION.vendor_name.
