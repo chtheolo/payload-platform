@@ -131,6 +131,13 @@ impl Link {
         })
     }
 
+    /// How long ago anything arrived from the camera; `None` if nothing has arrived yet.
+    pub fn last_heard(&self) -> Option<Duration> {
+        // Rust: `lock()` fails only if another thread panicked while holding the lock.
+        let last = *self.last_heard.lock().expect("last_heard lock poisoned");
+        last.map(|instant| instant.elapsed())
+    }
+
     pub async fn wait_for_heartbeat(&self, limit: Duration) -> Result<(), LinkError> {
         let mut messages = self.incoming.subscribe();
         let heartbeat = async {
@@ -229,6 +236,58 @@ impl Link {
         Err(LinkError::Timeout)
     }
 
+    /// Reads a uint8 camera parameter (PARAM_EXT_REQUEST_READ, answered by PARAM_EXT_VALUE).
+    pub async fn read_param(&self, name: &str) -> Result<u8, LinkError> {
+        let request = MavMessage::PARAM_EXT_REQUEST_READ(PARAM_EXT_REQUEST_READ_DATA {
+            target_system: self.camera.system_id,
+            target_component: self.camera.component_id,
+            param_id: name.into(),
+            // -1 means "look the parameter up by its name, not by an index".
+            param_index: -1,
+        });
+        self.ask(
+            ATTEMPTS,
+            |_| request.clone(),
+            |incoming| match incoming {
+                MavMessage::PARAM_EXT_VALUE(value) if value.param_id.to_str() == Ok(name) => {
+                    // A uint8 value travels in byte 0 of `param_value`.
+                    Some(value.param_value[0])
+                }
+                _ => None,
+            },
+        )
+        .await
+    }
+
+    /// Sets a uint8 camera parameter (PARAM_EXT_SET, answered by PARAM_EXT_ACK). Returns the
+    /// camera's verdict and the value in effect afterwards, which the ACK always carries.
+    pub async fn set_param(&self, name: &str, value: u8) -> Result<(ParamAck, u8), LinkError> {
+        let mut bytes = [0u8; 128];
+        bytes[0] = value;
+        let request = MavMessage::PARAM_EXT_SET(PARAM_EXT_SET_DATA {
+            target_system: self.camera.system_id,
+            target_component: self.camera.component_id,
+            param_id: name.into(),
+            param_value: bytes.into(),
+            param_type: MavParamExtType::MAV_PARAM_EXT_TYPE_UINT8,
+        });
+        // Setting a value can be repeated: setting it twice leaves the same state.
+        self.ask(
+            ATTEMPTS,
+            |_| request.clone(),
+            |incoming| match incoming {
+                MavMessage::PARAM_EXT_ACK(ack)
+                    if ack.param_id.to_str() == Ok(name)
+                        && ack.param_result != ParamAck::PARAM_ACK_IN_PROGRESS =>
+                {
+                    Some((ack.param_result, ack.param_value[0]))
+                }
+                _ => None,
+            },
+        )
+        .await
+    }
+
     /// Up to `attempts` tries of: send this attempt's message, then wait for an answer.
     ///
     /// Rust: `impl Fn(u8) -> MavMessage` and `impl FnMut(&MavMessage) -> Option<T>` accept
@@ -290,6 +349,14 @@ impl Link {
             target_component: self.camera.component_id,
             confirmation,
         })
+    }
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
     }
 }
 
