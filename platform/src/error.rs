@@ -82,4 +82,26 @@ impl PayloadError {
             PayloadError::Internal(_) => "internal",
         }
     }
+
+// {
+//   "error": {
+//     "code": "unsupported_value",
+//     "message": "`thermal_palette` doesn't support `lava`",
+//     "details": { "property": "thermal_palette", "options": ["white_hot", "black_hot", "ironbow", "rainbow"] }
+//   }
+// }
+    /// Extra fields that help the GCS react, such as the allowed range.
+    pub fn details(&self) -> Option<serde_json::Value> {
+        match self {
+            PayloadError::UnsupportedValue {
+                property, options, ..
+            } => Some(json!({ "property": property, "options": options })),
+            PayloadError::OutOfRange {
+                property,
+                minimum,
+                maximum,
+            } => Some(json!({ "property": property, "minimum": minimum, "maximum": maximum })),
+            _ => None,
+        }
+    }
 }
