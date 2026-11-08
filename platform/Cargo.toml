@@ -9,13 +9,23 @@ axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 humantime = "2"
 mavlink = { version = "0.18", default-features = false, features = ["std", "dialect-common", "mav2-message-extensions"] }
+# only with `--features prometheus` (see [features]): a normal build doesn't compile them
+metrics = { version = "0.24.6", optional = true }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false, features = ["http-listener"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 tracing = "0.1"
+# daily log files with --log-dir (src/logging.rs)
+tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2"
 
 [dev-dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
+
+[features]
+# off by default: `cargo build` is the production build, without metrics.
+# `cargo run --features prometheus` is the development build (src/telemetry.rs, monitoring/).
+prometheus = ["dep:metrics", "dep:metrics-exporter-prometheus"]
