@@ -183,7 +183,6 @@ async fn run(
 // it makes only sense to use it when we don't know the size of the value
 async fn connect(uri: CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
     loop {
-        info!("trying to connect to camera hardware...");
         match drivers::connect(&uri).await {
             Ok(driver) => return Ok(driver),
             Err(ConnectError::NoAnswer(reason)) => {
