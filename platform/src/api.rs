@@ -14,9 +14,10 @@ use serde_json::json;
 use crate::error::PayloadError;
 use crate::model::{Property, Reading, Snapshot, Value};
 use crate::payload::PayloadHandle;
+use crate::telemetry;
 
 pub fn router(payload: PayloadHandle) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/v1/payload", get(get_payload))
         .route(
             "/v1/payload/properties/{id}",
@@ -25,7 +26,9 @@ pub fn router(payload: PayloadHandle) -> Router {
         .route("/v1/payload/actions/{id}", post(post_action))
         // Unknown paths get a JSON error too, instead of an empty 404.
         .fallback(unknown_path)
-        .with_state(payload)
+        .with_state(payload);
+    // counts and times every request in the development build; unchanged in production
+    telemetry::instrument(router)
 }
 
 
@@ -106,6 +109,7 @@ async fn unknown_path() -> PayloadError {
 /// `{"error": {"code", "message", "details"}}`.
 impl IntoResponse for PayloadError {
     fn into_response(self) -> Response {
+        telemetry::error_sent(self.code());
         let status = match &self {
             PayloadError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             PayloadError::NotFound(_) => StatusCode::NOT_FOUND,

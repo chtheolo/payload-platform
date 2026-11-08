@@ -21,6 +21,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep, timeout};
 use tracing::{debug, warn};
 
+use crate::telemetry;
+
 /// Our own MAVLink address. We are on the same drone as the camera, so we use its system id;
 /// component 191 is MAV_COMP_ID_ONBORAD_COMPUTER
 const OUR_SYSTEM_ID: u8 = 1;
@@ -195,6 +197,9 @@ impl Link {
             [message_id as f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         );
         for attempt in 0..ATTEMPTS {
+            if attempt > 0 {
+                telemetry::camera_resend();
+            }
             // fresh for every attempt, so answers to an earlier attempt not to be mixed 
             let mut found = Vec::new(); // the answers collected so far 
             let mut refused = None;     // set if the camera says "no"
@@ -231,6 +236,7 @@ impl Link {
                 return Ok(found);
             }
         }
+        telemetry::camera_unanswered();
         Err(LinkError::Timeout)
     }
 
@@ -297,10 +303,14 @@ impl Link {
         mut pick: impl FnMut(&MavMessage) -> Option<T>,
     ) -> Result<T, LinkError> {
         for attempt in 0..attempts {
+            if attempt > 0 {
+                telemetry::camera_resend();
+            }
             if let Some(answer) = self.attempt(&message_for(attempt), &mut pick).await {
                 return Ok(answer);
             }
         }
+        telemetry::camera_unanswered();
         Err(LinkError::Timeout)
     }
 

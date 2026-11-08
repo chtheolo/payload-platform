@@ -24,6 +24,7 @@ use tracing::debug;
 
 use super::frame::{self, Frame, HOST, LENS};
 use crate::error::DriverError;
+use crate::telemetry;
 
 /// How often the probe asks, and what it reads: the zoom position (protocol 4.1). Nothing else
 /// reads ZOM, so the probe's answers can't be mistaken for the answer to a real read.
@@ -95,7 +96,10 @@ impl Link {
     /// Reading twice does no harm, so a read that gets no answer is simply sent again.
     pub async fn read(&self, module: char, identifier: &str) -> Result<String, DriverError> {
         let request = Frame::read(module, identifier);
-        for _ in 0..ATTEMPTS {
+        for attempt in 0..ATTEMPTS {
+            if attempt > 0 {
+                telemetry::camera_resend();
+            }
             // Subscribe *before* sending, so a quick answer can't arrive while nobody listens.
             let mut frames = self.incoming.subscribe();
             self.outbox.send(&request).await;
@@ -112,6 +116,7 @@ impl Link {
                 return Ok(data);
             }
         }
+        telemetry::camera_unanswered();
         Err(DriverError::Timeout)
     }
 

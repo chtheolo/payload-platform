@@ -24,6 +24,7 @@ use self::link::Link;
 use super::{Driver, resolve};
 use crate::error::{ConnectError, DriverError};
 use crate::model::{Action, Identity, Kind, Property, Sensor, Value, vocabulary};
+use crate::telemetry;
 use crate::uri::{CameraUri, UriError};
 
 /// The settings this driver uses, by identifier: the zoom on the lens (protocol 4.1), and the
@@ -112,7 +113,10 @@ impl Lc30tDriver {
     /// a refusal.
     async fn set(&self, module: char, identifier: &str, data: &str) -> Result<String, DriverError> {
         let mut reported = String::new();
-        for _ in 0..WRITE_ATTEMPTS {
+        for attempt in 0..WRITE_ATTEMPTS {
+            if attempt > 0 {
+                telemetry::camera_resend();
+            }
             self.link.write(module, identifier, data).await;
             // No answer at all is a timeout: `?` returns it straight away.
             reported = self.link.read(module, identifier).await?;

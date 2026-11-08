@@ -11,22 +11,26 @@
 //! - `model.rs`    the camera-independent model the GCS sees
 //! - `uri.rs`      the camera URI
 //! - `error.rs`    every error, and what the GCS receives for each
+//! - `logging.rs`  logs to the terminal, and to daily files with `--log-dir`
+//! - `telemetry.rs` Prometheus metrics, only with `--features prometheus`
 
 mod api;
 mod drivers;
 mod error;
+mod logging;
 mod model;
 mod payload;
+mod telemetry;
 mod uri;
 
 use std::future::IntoFuture;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
 use tokio::net::TcpListener;
 use tracing::{error, info};
-use tracing_subscriber::EnvFilter;
 
 use crate::uri::CameraUri;
 
@@ -41,14 +45,28 @@ struct Cli {
     /// where the GCS API listens.
     #[arg(short, long, default_value="0.0.0.0:8080")]
     listen: SocketAddr,
+    /// Also write the logs to daily files in this folder, keeping the last 7 days.
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
+    // `flatten` adds the fields of telemetry::Options here: `--metrics-listen` in the
+    // development build (--features prometheus), nothing in the production one.
+    #[command(flatten)]
+    telemetry: telemetry::Options,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     // INFO by default. Otherwise, 'RUST_LOG=debug ...'
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // `_logs` (not `_`) keeps the file writer alive until main ends, so the files get every line
+    let _logs = match logging::start(cli.log_dir.as_deref()) {
+        Ok(logs) => logs,
+        Err(message) => {
+            // no logging yet to report it with, so straight to the terminal
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -66,6 +84,8 @@ async fn run(cli: Cli) -> Result<(), String> {
     let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
     info!("Camera URI: {:?}", uri);
     info!("Camera URI: {:#?}", uri);
+    // before the core starts, so the metrics cover it from the beginning
+    telemetry::start(&cli.telemetry)?;
     let (handle, core_task) = payload::start(uri);
 
     let listener = TcpListener::bind(cli.listen)
