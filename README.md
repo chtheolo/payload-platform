@@ -71,6 +71,15 @@ cd platform && cargo run -- --camera mavlink://127.0.0.1:14580 --log-dir logs   
 
 On a real drone the platform would run as a service, whose journal (systemd's journald) could keep the terminal output instead. `--log-dir` is for when there's no journal, or a copy should go somewhere else.
 
+What gets logged: start-up, the camera connecting and going online or offline, and one line for every write or action, with what was asked and how it ended:
+
+```
+INFO platform::payload: write zoom = 4.0: ok, now 4.0
+WARN platform::payload: write zoom = 6.0: failed, timeout: the camera didn't confirm in time; read the value before retrying
+```
+
+Reads (GETs) and the once-a-second polls aren't logged, so a quiet platform writes almost nothing to the drone's storage.
+
 Everything above is the normal build, without metrics. That's the build for the drone.
 
 ## Metrics and Grafana
