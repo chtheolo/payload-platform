@@ -15,6 +15,7 @@ Supported cameras, simulated in [`camera-simulations/`](camera-simulations/READM
 ## Contents
 
 * [Running it](#running-it)
+* [Metrics and Grafana](#metrics-and-grafana)
 * [Trying the API](#trying-the-api)
 * [Tests](#tests)
 * [Design](#design)
@@ -62,7 +63,109 @@ In zsh, put a URI that contains `?` in quotes, such as `"mavlink://127.0.0.1:145
 
 **Demo.** `platform/demo.sh` starts the three simulators and a platform for each camera, with the APIs on ports 8080, 8081 and 8082. It runs the same scenario on every camera through the API, prints each request with its answer and how long it took, then stops everything. `platform/demo.sh http://127.0.0.1:8080` runs the scenario on a platform that's already running.
 
+**Log files.** The logs always go to the terminal. With `--log-dir`, they also go to one file per day in that folder, and only the last 7 days are kept, so they can't fill the drone's storage:
+
+```sh
+cd platform && cargo run -- --camera mavlink://127.0.0.1:14580 --log-dir logs    # logs/platform.<date>.log
+```
+
+On a real drone the platform would run as a service, whose journal (systemd's journald) could keep the terminal output instead. `--log-dir` is for when there's no journal, or a copy should go somewhere else.
+
+Everything above is the normal build, without metrics. That's the build for the drone.
+
+## Metrics and Grafana
+
+Metrics are for development and bench tests, so they're a Cargo feature, `prometheus`, which is off by default:
+
+| | Build | Run |
+| --- | --- | --- |
+| Without metrics: the drone | `cargo build --release` | `cargo run -- --camera …` |
+| With metrics: development | `cargo build --features prometheus` | `cargo run --features prometheus -- --camera … --metrics-listen 0.0.0.0:9000` |
+
+- `--features prometheus` is a cargo option, so it goes before the `--`. It decides **at compile time** whether metrics exist. Without it, the metrics crates aren't compiled in, and the platform has no `--metrics-listen` option.
+- `--metrics-listen` is a platform option, so it goes after the `--`. It decides **at run time** whether metrics are served, and where: `http://<address>/metrics`. Without it, even the metrics build serves nothing.
+- The metrics get a port of their own, separate from the GCS API, so they never travel over the drone–ground link.
+
+**With Grafana.** Only Prometheus and Grafana run in Docker; the simulators and the platforms run as usual. The data source and the dashboard are loaded from [`monitoring/`](monitoring/) every time Grafana starts, so nobody has to create them:
+
+```sh
+docker compose -f monitoring/docker-compose.yml up -d    # from the repository root: Prometheus :9090, Grafana :3000
+platform/demo.sh --metrics                               # 3 simulators + 3 platforms with metrics, then traffic until Ctrl-C
+open http://localhost:3000                               # the dashboard opens as the home page
+docker compose -f monitoring/docker-compose.yml down     # when you're done
+```
+
+- **Prometheus collects from ports 9000, 9001 and 9002,** the ports `demo.sh --metrics` uses. A single platform started with `--metrics-listen 0.0.0.0:9000` shows up as well.
+- **Grafana opens without a login, as a viewer.** To change the dashboard, sign in as `admin` / `admin`, edit it, export it (Share → Export → Save to file), and replace `monitoring/grafana/dashboards/payload-platform.json`.
+- **To see a camera go offline** while the demo runs: `pkill -f "camera-sim lc30t"`.
+
+The dashboard has a camera menu and three rows:
+- **Cameras:** identity, online or offline, time since last heard, the queue, and an online timeline.
+- **Requests from the GCS:** requests by status, errors by code, and the 95th-percentile duration of requests and of the camera work behind them.
+- **Inside the platform:** queue depth, resends and unanswered requests, and polls.
+
+| Metric | Type | What it counts |
+| --- | --- | --- |
+| `payload_http_requests_total`, `payload_http_request_duration_seconds` | counter, histogram | every request from the GCS, by method, route and status |
+| `payload_errors_total` | counter | errors sent to the GCS, by code |
+| `payload_job_duration_seconds` | histogram | the camera work of each write or action, without the queue |
+| `payload_queue_depth` | gauge | jobs waiting for the core, out of 16 |
+| `payload_camera_online`, `payload_camera_last_heard_seconds` | gauges | liveness, updated every second |
+| `payload_camera_info` | gauge, always 1 | the camera's identity, in its labels; the dashboard uses it to show camera names |
+| `payload_polls_total` | counter | polls of the camera, by outcome |
+| `payload_camera_resends_total`, `payload_camera_unanswered_total` | counters | requests sent to the camera again, and requests it never answered |
+
+In the code, every `#[cfg(feature = "prometheus")]` is in `platform/src/telemetry.rs`. The rest of the code calls its functions the same way in both builds; in the build without metrics they're empty, and the compiler removes them. Because the compiler only checks the build it's asked for, check both:
+
+```sh
+cargo clippy --all-targets && cargo clippy --all-targets --features prometheus
+cargo test && cargo test --features prometheus    # the second also runs the metrics test
+```
+
 ## Trying the API
+
+### Starting the platform
+
+From `platform/`, with the BX-20 simulator running (`cd camera-simulations && cargo run --release -- bx20`):
+
+```sh
+cargo run -- --camera mavlink://127.0.0.1:14580                          # BX-20, profile detected
+cargo run -- --camera "mavlink://127.0.0.1:14580?profile=bx20"           # profile forced (quotes for zsh)
+cargo run -- --camera mavlink://127.0.0.1:14580 --listen 127.0.0.1:9090  # the API on another port
+cargo run -- -c mavlink://127.0.0.1:14580 -l 127.0.0.1:9090              # the same, with the short flags
+cargo run -- --camera mavlink://127.0.0.1:14580 --log-dir logs           # logs also to logs/platform.<date>.log
+RUST_LOG=debug cargo run -- --camera mavlink://127.0.0.1:14580           # more detailed logs
+cargo run --release -- --camera mavlink://127.0.0.1:14580                # optimised build, as on the drone
+cargo run -- --help                                                      # every option
+
+# The other cameras, each with its own simulator running
+cargo run -- --camera mavlink://127.0.0.1:14581                          # VLR-10, profile detected
+cargo run -- --camera "mavlink://127.0.0.1:14581?profile=vlr10"          # VLR-10, profile forced
+cargo run -- --camera lc30t://127.0.0.1:9003                             # LC-30T
+cargo run -- --camera "lc30t://127.0.0.1:9003?interval_ms=100"           # LC-30T, 100 ms between frames
+
+# With metrics (see "Metrics and Grafana")
+cargo run --features prometheus -- --camera mavlink://127.0.0.1:14580 --metrics-listen 0.0.0.0:9000
+curl -s localhost:9000/metrics | grep ^payload                            # what Prometheus collects
+```
+
+Start-up errors worth trying. Each one stops the platform at once, with a clear message:
+
+```sh
+cargo run -- --camera "mavlink://127.0.0.1:14580?profil=bx20"      # unknown option `profil`; this driver accepts: profile, system_id, component_id
+cargo run -- --camera "mavlink://127.0.0.1:14580?profile=xyz"      # unknown profile `xyz`; known profiles: bx20, vlr10
+cargo run -- --camera "mavlink://127.0.0.1:14580?system_id=abc"    # option `system_id` has an invalid value `abc`
+cargo run -- --camera "lc30t://127.0.0.1:9003?interval=100"        # unknown option `interval`; this driver accepts: interval_ms
+cargo run -- --camera mavlink://127.0.0.1                          # the camera URI needs a host and a port
+cargo run -- --camera http://127.0.0.1:14580                       # unknown camera URI scheme `http`; known schemes: mavlink, lc30t
+cargo run -- --camera "not a uri"                                  # `not a uri` is not valid URI
+cargo run -- --camera mavlink://127.0.0.1:14580 --log-dir /dev/null/x   # can't write logs to /dev/null/x
+cargo run -- --camera mavlink://127.0.0.1:14580 --metrics-listen 0.0.0.0:9000   # error: unexpected argument: no metrics in this build
+```
+
+A camera that isn't running yet is not an error. With no simulator, `cargo run -- --camera mavlink://127.0.0.1:14580` logs `no heartbeat from 127.0.0.1:14580; retrying in 2s` and connects as soon as the camera answers. Meanwhile `GET /v1/payload` reports `"status": "connecting"`.
+
+### Requests
 
 These requests assume the BX-20 is attached (`mavlink://127.0.0.1:14580`). Ranges and options come from the attached camera: `{"value": 25}` is out of range on the BX-20 but a valid zoom on the LC-30T (1–30×), and `lava` is one of the LC-30T's palettes. `-i` adds the status line to the output, and `| jq` makes the JSON easier to read.
 
@@ -190,26 +293,13 @@ The platform was then built in steps, each one checked against the simulators be
 
 ![Architecture overview: GCS, API layer, payload core, drivers and cameras](platform/images/architecture.overview.png "Architecture overview")
 
-```
-          GCS (on the ground)
-                   │  HTTP + JSON over the drone–ground IP link
-┌──────────────────▼───────────────────────────────────┐
-│ API layer        HTTP routes, JSON, error mapping    │
-│ Payload core     validation, state cache, polling,   │
-│                  command queue                       │
-│ ── driver contract ───────────────────────────────── │
-│ mavlink driver   profiles: bx20, vlr10               │
-│ lc30t driver                                         │
-└────────┬───────────────────────────────┬─────────────┘
-         │ MAVLink 2 over UDP            │ ASCII frames over UDP
-   BX-20 or VLR-10                    LC-30T
-```
 
 - **API layer** knows HTTP and JSON, and nothing about cameras.
 - **Payload core** knows the generic model. It checks every request against the attached camera's descriptors, runs commands one at a time, keeps the last observed state, polls the camera and publishes changes.
 - **Drivers** know one protocol each. A driver turns generic operations into camera messages and back, and decides how to confirm a change and how to detect that the camera is alive. Both MAVLink cameras share one driver; their differences live in small per-model profiles.
 
 The code in `platform/src/` follows the same layers, and each file uses only the ones listed below it:
+
 
 ```
 main.rs          start-up: command line, logging, wiring the layers together
@@ -514,10 +604,6 @@ The core promises the driver that calls never overlap and that every value has a
 | LC-30T writes resent while the read-back still differs | a lost datagram and an ignored value look the same, and resending is safe because a write names a value | `rejected` at the first difference: one lost datagram would fail the request |
 | Tests run the real simulators and the real platform as separate processes, with a proxy for a bad link | they test what the GCS sees, against the closest thing to the real cameras | a mock camera inside each test: faster, but it checks our reading of the vendor documents rather than the cameras |
 | Benchmarks time whole requests | nearly all the time is spent waiting for the camera | timing single functions such as frame parsing: precise, but it measures microseconds that don't matter here |
-
-### Limitations and next steps
-
-- The LC-30T read-back assumes the pod reports a new value as soon as it has accepted it, as the simulator does. A real lens takes time to move: if a real pod's `MUL` reports the position while the lens is moving, the confirmation would have to wait for the lens to settle.
-- A VLR-10 zoom of several steps that loses an answer halfway ends in `timeout`, and the zoom may have moved part of the way (`tests/faults.rs` shows this). That's what the advice for `timeout` is for: re-read `zoom` before trying again.
-- A forced profile that doesn't match the camera, say `?profile=bx20` on a VLR-10, isn't detected; writes then fail with `rejected` or `internal`. Forcing is meant for a rebranded camera that reports another name.
-- Not built yet: the events stream, metrics for monitoring, and third-party drivers (see "Adding new payload types").
+| Metrics as a Cargo feature that's off by default, served on a port of their own | the drone's build contains no metrics code or crates, and metrics never use the drone–ground link | metrics always compiled in and switched on at run time: one binary to test, but extra dependencies on the drone; a `/metrics` route in the GCS API: no extra port, but internals on the same link as the GCS |
+| A provisioned Grafana dashboard, as files in the repository | the same dashboard on every computer, with nothing to create, and reviewed like code | building it by hand in Grafana: lost with the container, and different for everyone |
+| Log files rotated daily, last 7 kept, written by a background thread | the logs survive on the drone without filling its storage, and writing never slows the platform | only the terminal and the system journal: enough under systemd, not without it |
