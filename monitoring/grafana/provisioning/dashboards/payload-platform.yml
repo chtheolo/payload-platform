@@ -1,0 +1,13 @@
+# Loads every dashboard file in /var/lib/grafana/dashboards, mounted from monitoring/grafana/dashboards.
+apiVersion: 1
+
+providers:
+  - name: payload-platform
+    folder: Payload platform
+    type: file
+    # Changes made in Grafana's editor aren't saved over the file. To change the dashboard, edit
+    # it in Grafana, export it (Share → Export → Save to file) and replace the JSON file, so the
+    # repository stays the one source of truth.
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

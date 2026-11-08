@@ -1,0 +1,46 @@
+# Prometheus and Grafana for the development build, with the platform's dashboard ready.
+#
+#   docker compose -f monitoring/docker-compose.yml up -d     start both (from the repository root)
+#   docker compose -f monitoring/docker-compose.yml down      stop and remove both
+#
+# Grafana: http://localhost:3000 (no login). Prometheus: http://localhost:9090.
+#
+# Only these two run in Docker. The platforms run on the computer itself, as usual, built with
+# `--features prometheus` and started with `--metrics-listen 0.0.0.0:9000`. `platform/demo.sh --metrics`
+# does both, for three platforms on ports 9000, 9001 and 9002.
+
+name: payload-platform-monitoring
+
+services:
+  prometheus:
+    # Exact versions, so this starts the same way on every computer and next month too.
+    image: prom/prometheus:v3.5.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # `host.docker.internal` is the computer Docker runs on, where the platforms run. Docker
+    # Desktop (macOS, Windows) knows that name already; this line adds it on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:12.0.2
+    ports:
+      - "3000:3000"
+    environment:
+      # A local development tool: whoever opens the page sees the dashboards without a login.
+      # To change a dashboard, sign in (Grafana's default user: admin, password admin).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      # Open the platform's dashboard as the home page.
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/payload-platform.json
+    volumes:
+      # Provisioning: Grafana reads these files at every start, so the data source and the
+      # dashboard are there on any computer, with nothing to click and nothing to recreate.
+      # Only these two folders, so Grafana's other provisioning folders stay as they are.
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus

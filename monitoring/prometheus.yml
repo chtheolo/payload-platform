@@ -1,0 +1,14 @@
+# Where Prometheus collects the platforms' metrics: every 5 s, from the computer Docker runs on.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: payload-platform
+    static_configs:
+      # One platform per camera, on the ports `./demo.sh --metrics` uses. A platform that isn't
+      # running only shows as "down" under Status → Targets in Prometheus.
+      - targets:
+          - host.docker.internal:9000
+          - host.docker.internal:9001
+          - host.docker.internal:9002

@@ -1,0 +1,15 @@
+# The data source the dashboard reads from. Its `uid` is how the dashboard's panels refer to it.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    # The service's name in docker-compose.yml: containers reach each other by name.
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Prometheus's scrape interval, so the dashboard's rates use windows that fit it.
+      timeInterval: 5s
