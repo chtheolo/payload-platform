@@ -164,18 +164,25 @@ pub async fn simulator(camera: Camera) -> Process {
 
 /// Starts the platform for the camera at `uri`, with its API on a free local port.
 pub fn platform(uri: &str) -> (Process, Api) {
+    platform_with(uri, &[])
+}
+
+/// Like `platform`, with `extra` added to its command line, such as `["--log-dir", ...]`.
+pub fn platform_with(uri: &str, extra: &[&str]) -> (Process, Api) {
     let port = free_port();
     let listen = format!("127.0.0.1:{port}");
     // Rust: for integration tests Cargo builds the package's binary first, and passes its
     // path in CARGO_BIN_EXE_<name>; ours is called `platform`.
     let program = Path::new(env!("CARGO_BIN_EXE_platform"));
-    let process = Process::start(program, &["--camera", uri, "--listen", &listen], "platform");
+    let mut args = vec!["--camera", uri, "--listen", &listen];
+    args.extend_from_slice(extra);
+    let process = Process::start(program, &args, "platform");
     (process, Api::new(port))
 }
 
 /// A TCP port nobody is using: binding port 0 lets the system pick one, and dropping the
 /// listener right away frees it for the platform.
-fn free_port() -> u16 {
+pub fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("no free port");
     listener.local_addr().expect("no local address").port()
 }
@@ -212,9 +219,14 @@ pub struct Setup {
 
 /// Starts `camera`, then a platform for it, and waits until the platform is online.
 pub async fn start(camera: Camera) -> Setup {
+    start_with(camera, &[]).await
+}
+
+/// Like `start`, with `extra` added to the platform's command line.
+pub async fn start_with(camera: Camera, extra: &[&str]) -> Setup {
     let turn = turn(camera).await;
     let simulator = simulator(camera).await;
-    let (platform, api) = platform(&camera.uri(camera.port()));
+    let (platform, api) = platform_with(&camera.uri(camera.port()), extra);
     api.wait_for("online").await;
     Setup {
         api,
