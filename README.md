@@ -188,7 +188,7 @@ The platform was then built in steps, each one checked against the simulators be
 
 ### Architecture
 
-![Architecture overview: GCS, API layer, payload core, drivers and cameras](plaform/images/architecture.overview.png "Architecture Overview")
+![Architecture overview: GCS, API layer, payload core, drivers and cameras](platform/images/architecture.overview.png "Architecture overview")
 
 ```
           GCS (on the ground)
