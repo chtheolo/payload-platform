@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant, SystemTime};
 
+use serde_json::json;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -230,6 +231,11 @@ async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<S
                 }
                 Err(error) => Err(error.into()),
             };
+            // one line per command: what was asked, and how it ended
+            match &result {
+                Ok(updated) => info!("write {property} = {}: ok, now {}", json!(value), json!(updated.value)),
+                Err(error) => warn!("write {property} = {}: failed, {}: {error}", json!(value), error.code()),
+            }
             // Rust: `send` fails if the HTTP request already gave up (its deadline passed).
             // There's nothing left to do then, so the result is ignored on purpose.
             let _ = answer.send(result);
@@ -239,10 +245,15 @@ async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<S
             arguments,
             answer,
         } => {
-            let result = match driver.invoke(&action, &arguments).await {
+            // the type is written out because the log below uses `result` before `answer.send` does
+            let result: Result<_, PayloadError> = match driver.invoke(&action, &arguments).await {
                 Ok(changed) => Ok(store(publisher, changed)),
                 Err(error) => Err(error.into()),
             };
+            match &result {
+                Ok(changed) => info!("invoke {action} {}: ok, now {}", json!(arguments), json!(changed)),
+                Err(error) => warn!("invoke {action} {}: failed, {}: {error}", json!(arguments), error.code()),
+            }
             let _ = answer.send(result);
         }
     }

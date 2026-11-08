@@ -82,8 +82,6 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<(), String> {
     let uri = CameraUri::parse(&cli.camera).map_err(|error| error.to_string())?;
-    info!("Camera URI: {:?}", uri);
-    info!("Camera URI: {:#?}", uri);
     // before the core starts, so the metrics cover it from the beginning
     telemetry::start(&cli.telemetry)?;
     let (handle, core_task) = payload::start(uri);
