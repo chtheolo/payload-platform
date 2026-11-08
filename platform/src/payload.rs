@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -12,6 +12,7 @@ use crate::error::{ConnectError, PayloadError};
 use crate::model::{
     ConnectionStatus, Kind, Property, Reading, Snapshot, Timestamp, Value, round_to,
 };
+use crate::telemetry;
 use crate::uri::CameraUri;
 
 // README, "Timing and liveness".
@@ -124,7 +125,11 @@ impl PayloadHandle {
     fn submit(&self, job: Job) -> Result<(), PayloadError> {
         // jobs: mpsc::Sender::try_send()
         match self.jobs.try_send(job) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // capacity() = free places, so this is how many jobs wait now
+                telemetry::queue_depth(self.jobs.max_capacity() - self.jobs.capacity());
+                Ok(())
+            }
             Err(TrySendError::Full(_)) => Err(PayloadError::Busy),
             Err(TrySendError::Closed(_)) => Err(stopped()),
         }
@@ -153,7 +158,8 @@ async fn run(
     mut queue: mpsc::Receiver<Job>,
     publisher: watch::Sender<Snapshot>,
 ) -> Result<(), ConnectError> {
-    let mut driver = connect(uri).await?;       // connect to the camera, with retries 
+    let mut driver = connect(uri).await?;       // connect to the camera, with retries
+    telemetry::camera_identified(&driver.identity());
 
     // Publish who the camera is and what it can do. The values follow with the first poll.
     publisher.send_modify(|snapshot| {
@@ -170,7 +176,10 @@ async fn run(
         // select! waits for whichever comes first, a job or the next poll tick.
         tokio::select! {
             job = queue.recv() => match job {
-                Some(job) => handle(job, driver.as_mut(), &publisher).await,
+                Some(job) => {
+                    telemetry::queue_depth(queue.len());
+                    handle(job, driver.as_mut(), &publisher).await
+                }
                 // Every handle is gone: the platform is shutting down.
                 None => return Ok(()),
             },
@@ -196,6 +205,12 @@ async fn connect(uri: CameraUri) -> Result<Box<dyn Driver>, ConnectError> {
 
 /// Runs one job on the driver and sends back the answer.
 async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<Snapshot>) {
+    // for the metrics: how long the camera work takes, without the time in the queue
+    let started = Instant::now();
+    let kind = match &job {
+        Job::Write { .. } => "write",
+        Job::Invoke { .. } => "invoke",
+    };
     match job {
         Job::Write {
             property,
@@ -231,6 +246,7 @@ async fn handle(job: Job, driver: &mut dyn Driver, publisher: &watch::Sender::<S
             let _ = answer.send(result);
         }
     }
+    telemetry::job_done(kind, started.elapsed());
 }
 
 /// Updates the connection status, then re-reads every property while the camera is online.
@@ -245,6 +261,7 @@ async fn refresh(driver: &mut dyn Driver, publisher: &watch::Sender<Snapshot>) {
     if status != previous {
         info!("camera is now {status:?}");
     }
+    telemetry::camera_status(status == ConnectionStatus::Online, heard);
     publisher.send_modify(|snapshot| {
         snapshot.connection.status = status;
         // Turn "heard 0.4 s ago" into a clock time the GCS can show.
@@ -259,8 +276,12 @@ async fn refresh(driver: &mut dyn Driver, publisher: &watch::Sender<Snapshot>) {
     match driver.read().await {
         Ok(values) => {
             store(publisher, values);
+            telemetry::poll_done(true);
         }
-        Err(error) => warn!("reading the camera failed: {error}"),
+        Err(error) => {
+            warn!("reading the camera failed: {error}");
+            telemetry::poll_done(false);
+        }
     }
 }
 
