@@ -10,7 +10,157 @@ Supported cameras, simulated in [`camera-simulations/`](camera-simulations/READM
 | Optronique Vallerin VLR-10 | MAVLink 2 camera protocol | 14581 |
 | Lucen LC-30T | Vendor ASCII protocol over UDP | 9003 |
 
-> **Status:** design draft. The application will live in `platform/` and is not written yet.
+> **Status:** working with all three cameras. The code is in [`platform/`](platform/). [Running it](#running-it) and [Tests](#tests) show how to try it, and [Design](#design) explains it.
+
+## Contents
+
+* [Running it](#running-it)
+* [Trying the API](#trying-the-api)
+* [Tests](#tests)
+* [Design](#design)
+  * [Scope](#scope)
+  * [Approach](#approach)
+  * [Architecture](#architecture)
+  * [Payload model](#payload-model)
+  * [GCS API](#gcs-api)
+  * [Errors](#errors)
+  * [Camera URI](#camera-uri)
+  * [Translation per camera](#translation-per-camera)
+  * [Timing and liveness](#timing-and-liveness)
+  * [Driver contract](#driver-contract)
+  * [Adding new payload types](#adding-new-payload-types)
+  * [Decisions and trade-offs](#decisions-and-trade-offs)
+  * [Limitations and next steps](#limitations-and-next-steps)
+
+## Running it
+
+You need Rust 1.88 or later, plus `curl` (7.82 or later, for `--json`) and `jq` for the demo.
+
+Run one simulator, then the platform with that camera's URI, each in its own terminal:
+
+```sh
+cd camera-simulations && cargo run --release -- bx20    # or vlr10, or lc30t
+cd platform && cargo run -- --camera mavlink://127.0.0.1:14580
+```
+
+| Camera | URI |
+| --- | --- |
+| BX-20 | `mavlink://127.0.0.1:14580` |
+| VLR-10 | `mavlink://127.0.0.1:14581` |
+| LC-30T | `lc30t://127.0.0.1:9003` |
+
+Then use the API as a GCS would:
+
+```sh
+curl -s localhost:8080/v1/payload | jq
+curl -s -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 7}'
+```
+
+[Trying the API](#trying-the-api) has more requests, including one for each error.
+
+In zsh, put a URI that contains `?` in quotes, such as `"mavlink://127.0.0.1:14581?profile=vlr10"`: zsh treats `?` as a wildcard.
+
+**Demo.** `platform/demo.sh` starts the three simulators and a platform for each camera, with the APIs on ports 8080, 8081 and 8082. It runs the same scenario on every camera through the API, prints each request with its answer and how long it took, then stops everything. `platform/demo.sh http://127.0.0.1:8080` runs the scenario on a platform that's already running.
+
+## Trying the API
+
+These requests assume the BX-20 is attached (`mavlink://127.0.0.1:14580`). Ranges and options come from the attached camera: `{"value": 25}` is out of range on the BX-20 but a valid zoom on the LC-30T (1–30×), and `lava` is one of the LC-30T's palettes. `-i` adds the status line to the output, and `| jq` makes the JSON easier to read.
+
+Normal use:
+
+```sh
+# Reading: answered at once from the platform's cache, without asking the camera
+curl -s localhost:8080/v1/payload                                   # everything
+curl -s localhost:8080/v1/payload/properties/zoom
+curl -s localhost:8080/v1/payload/properties/sensor
+curl -s localhost:8080/v1/payload/properties/thermal_palette
+
+# Writing: queued as a Job::Write; returns the property as the camera reports it afterwards
+curl -s -X PUT localhost:8080/v1/payload/properties/zoom            --json '{"value": 1}'
+curl -s -X PUT localhost:8080/v1/payload/properties/zoom            --json '{"value": 20}'
+curl -s -X PUT localhost:8080/v1/payload/properties/zoom            --json '{"value": 10.5}'
+curl -s -X PUT localhost:8080/v1/payload/properties/sensor          --json '{"value": "thermal"}'
+curl -s -X PUT localhost:8080/v1/payload/properties/sensor          --json '{"value": "visible"}'
+curl -s -X PUT localhost:8080/v1/payload/properties/thermal_palette --json '{"value": "ironbow"}'
+curl -s -X PUT localhost:8080/v1/payload/properties/thermal_palette --json '{"value": "rainbow"}'
+
+# Actions: queued as a Job::Invoke; return the properties they changed
+curl -s -X POST localhost:8080/v1/payload/actions/zoom_step --json '{"direction": "in"}'    # zoom 11.5
+curl -s -X POST localhost:8080/v1/payload/actions/zoom_step --json '{"direction": "out"}'   # zoom 10.5
+```
+
+Expected errors, grouped by the answer (see [Errors](#errors) for the body):
+
+```sh
+# 200, but rounded to the resolution: the answer shows "value": 4.0
+curl -s -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 4.04}'
+
+# 422 out_of_range, with minimum and maximum in details
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 25}'
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": 0.5}'
+
+# 422 unsupported_value, with the options in details
+curl -s -i -X PUT localhost:8080/v1/payload/properties/thermal_palette --json '{"value": "lava"}'
+curl -s -i -X PUT localhost:8080/v1/payload/properties/sensor          --json '{"value": "night"}'
+curl -s -i -X POST localhost:8080/v1/payload/actions/zoom_step         --json '{"direction": "up"}'
+
+# 400 invalid_request: the wrong type
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom            --json '{"value": "max"}'
+curl -s -i -X PUT localhost:8080/v1/payload/properties/thermal_palette --json '{"value": 2}'
+
+# 400 invalid_request: a body the platform can't read
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom --json '{"valeu": 4}'     # typo: unknown field
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom --json '{"value": true}'  # neither a number nor text
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom --json 'not json'
+curl -s -i -X PUT localhost:8080/v1/payload/properties/zoom                           # no body
+
+# 400 invalid_request: bad action arguments
+curl -s -i -X POST localhost:8080/v1/payload/actions/zoom_step --json '{}'                               # missing direction
+curl -s -i -X POST localhost:8080/v1/payload/actions/zoom_step --json '{"direction": "in", "speed": 2}'  # unknown argument
+
+# 404 not_found
+curl -s -i localhost:8080/v1/payload/properties/focus
+curl -s -i -X PUT  localhost:8080/v1/payload/properties/focus --json '{"value": 1}'
+curl -s -i -X POST localhost:8080/v1/payload/actions/record   --json '{}'
+curl -s -i localhost:8080/v1/nothing
+
+# 405: the wrong method on a known path
+curl -s -i -X DELETE localhost:8080/v1/payload/properties/zoom
+```
+
+- Every error comes with the `{"error": …}` body except the 405. axum sends that one before the platform's code runs, with an empty body and an `allow: GET,HEAD,PUT` header.
+- axum would answer a request with no body with 415. The platform answers 400 `invalid_request` for every body it can't read, so a GCS has one code to handle.
+- While the camera is offline, `PUT` and `POST` answer 503 `payload_offline` before they look the id up, so `PUT focus` gets 503 instead of 404. A `GET` still answers from the cache.
+
+## Tests
+
+```sh
+cd platform
+cargo test        # unit, end-to-end and fault tests: about 15 s
+cargo test --release --test bench -- --ignored --nocapture --test-threads 1    # benchmarks
+```
+
+The end-to-end, fault and benchmark tests run the real simulators and the real platform as separate processes, and call the API like a GCS. Each simulator has a fixed port, so stop any simulator you're running first. The tests build the simulators if that hasn't been done yet.
+
+- **Unit tests**, next to the code in `src/`: each translation on its own, such as zoom percentages and steps, firmware numbers, LC-30T frames and checksums (checked against the examples in the vendor documents), URI parsing, and the checks every request goes through.
+- **`tests/e2e.rs`**: one scenario, written only against the API, passes unchanged on all three cameras. Each camera describes itself correctly and rounds zoom requests to its own resolution. A camera that stops is shown `offline` within a few seconds, and the platform comes back online on its own when the camera restarts. A camera that starts after the platform is waited for, and a wrong URI stops the platform at once.
+- **`tests/faults.rs`**: a proxy between the platform and the camera loses chosen datagrams. A lost LC-30T write is resent and still succeeds, and one that never arrives ends in `rejected`. A lost BX-20 answer leads to a resend, and three lost answers end in `timeout`. A VLR-10 step is never resent, so a lost answer ends in `timeout`, with the zoom part of the way.
+- **`tests/bench.rs`**: how long each operation takes on each camera, as the GCS sees it, and what a burst of 30 simultaneous writes does.
+
+Benchmark results, with the simulators on the same computer (release build, median in milliseconds):
+
+| Operation | BX-20 | VLR-10 | LC-30T |
+| --- | --- | --- | --- |
+| read a property (from the cache) | 0.1 | 0.2 | 0.3 |
+| set `zoom` | 0.4 | 0.7 | 104 |
+| `zoom_step` | 0.3 | 0.4 | 157 |
+| set `sensor` | 0.3 | 0.2 | 104 |
+| set `thermal_palette` | 0.1 | 0.1 | 104 |
+| burst of 30 writes at once | 18 done, 12 `busy` | 18 done, 12 `busy` | 17 done, 13 `busy` |
+
+- Nearly all the time is spent waiting for the camera. The simulators answer at once, so real cameras will be slower, the MAVLink ones included.
+- An LC-30T write takes about 100 ms because the vendor asks for at least 50 ms between frames: the write, then 50 ms later the read-back that confirms it. `zoom_step` reads first, so it takes three frames. A write that lands just behind the once-a-second poll also waits for the poll's three reads, which is why a few writes take up to about 300 ms.
+- In the burst, the core runs one write and queues 16 more. The rest are answered `busy` at once instead of piling up (see "Timing and liveness").
 
 ## Design
 
@@ -28,7 +178,17 @@ Out of scope: video streaming, gimbal control, photo and video capture, focus, s
 
 The design starts from a per-camera inventory of the three vendor documents and simulators: how each camera is identified, how it zooms, switches sensor and changes palette, how it confirms a change, and how to tell that it is alive. The API offers the common set of those operations in camera-independent units, plus a description of what the attached camera supports. Everything camera-specific lives in a driver.
 
+The platform was then built in steps, each one checked against the simulators before the next:
+
+1. The design in this README: the inventory, the API and the driver contract.
+2. The BX-20 end to end: the API, the core, and the MAVLink driver with its first profile.
+3. The VLR-10, as a second MAVLink profile. It took one new file and one line to register it, which confirmed that the split between driver and profile is in the right place.
+4. The LC-30T, as a second driver for a different protocol. The core and the API didn't change, which confirmed the driver contract.
+5. The tests: unit tests for each translation, end-to-end tests against the simulators, fault tests over a lossy link, and benchmarks.
+
 ### Architecture
+
+![Architecture overview: GCS, API layer, payload core, drivers and cameras](plaform/images/architecture.overview.png "Architecture Overview")
 
 ```
           GCS (on the ground)
@@ -36,7 +196,7 @@ The design starts from a per-camera inventory of the three vendor documents and 
 ┌──────────────────▼───────────────────────────────────┐
 │ API layer        HTTP routes, JSON, error mapping    │
 │ Payload core     validation, state cache, polling,   │
-│                  command queue, events               │
+│                  command queue                       │
 │ ── driver contract ───────────────────────────────── │
 │ mavlink driver   profiles: bx20, vlr10               │
 │ lc30t driver                                         │
@@ -48,6 +208,25 @@ The design starts from a per-camera inventory of the three vendor documents and 
 - **API layer** knows HTTP and JSON, and nothing about cameras.
 - **Payload core** knows the generic model. It checks every request against the attached camera's descriptors, runs commands one at a time, keeps the last observed state, polls the camera and publishes changes.
 - **Drivers** know one protocol each. A driver turns generic operations into camera messages and back, and decides how to confirm a change and how to detect that the camera is alive. Both MAVLink cameras share one driver; their differences live in small per-model profiles.
+
+The code in `platform/src/` follows the same layers, and each file uses only the ones listed below it:
+
+```
+main.rs          start-up: command line, logging, wiring the layers together
+api.rs           API layer
+payload.rs       payload core
+drivers/
+├── mod.rs       the driver contract, and the choice of driver by URI scheme
+├── mavlink/     mavlink://
+│   ├── link.rs  MAVLink itself: heartbeats, commands and their answers, retries
+│   └── camera/  the MAVLink camera driver, with one profile per model: bx20.rs, vlr10.rs
+└── lc30t/       lc30t://: the ASCII frames, the paced link, the driver
+model.rs         the payload model the GCS sees
+uri.rs           the camera URI
+error.rs         the errors, from the drivers' to the GCS's
+```
+
+Drivers are grouped by protocol, because the protocol code is what they share. A MAVLink gimbal, for example, would be a `gimbal/` folder next to `camera/`, using the same `link.rs`.
 
 ### Payload model
 
@@ -131,7 +310,7 @@ Why HTTP + JSON for a drone–ground link:
 | `GET` | `/v1/payload/properties/{id}` | one property |
 | `PUT` | `/v1/payload/properties/{id}` | set a property; body `{"value": …}` |
 | `POST` | `/v1/payload/actions/{id}` | run an action; the body holds its arguments |
-| `GET` | `/v1/payload/events` | server-sent events for every change (stretch goal) |
+| `GET` | `/v1/payload/events` | server-sent events for every change (stretch goal, not built yet) |
 
 `GET /v1/payload` with the BX-20 attached:
 
@@ -197,7 +376,7 @@ Rules the GCS can rely on:
 - Every request finishes within 5 s.
 - New properties and actions don't change the API version. Breaking changes would go to `/v2`.
 
-**Events (stretch goal).** `GET /v1/payload/events` is a server-sent events stream. It starts with a `snapshot` event holding the full `/v1/payload` body, then sends a `property` event for each changed value and a `connection` event when the status changes, with a keep-alive comment every 15 s. A client that reconnects gets a fresh snapshot, so a dropped link never leaves the GCS with a wrong picture.
+**Events (stretch goal, not built yet).** `GET /v1/payload/events` is a server-sent events stream. It starts with a `snapshot` event holding the full `/v1/payload` body, then sends a `property` event for each changed value and a `connection` event when the status changes, with a keep-alive comment every 15 s. A client that reconnects gets a fresh snapshot, so a dropped link never leaves the GCS with a wrong picture.
 
 ### Errors
 
@@ -278,8 +457,8 @@ With `profile=auto`, the MAVLink driver requests `CAMERA_INFORMATION` and picks 
 | Read `sensor` | request 270 → `VIDEO_STREAM_STATUS` THERMAL flag | request 270 → which of streams 1 and 2 is RUNNING | `PIP` read: 00 or 03 |
 | Write `sensor` | `MAV_CMD_SET_CAMERA_SOURCE`: param1 0, param2 1 or 2, param3 0 | `MAV_CMD_VIDEO_START_STREAMING`: param1 1 or 2 | `PIP` write 00 or 03, then read-back |
 | `thermal_palette` | `PARAM_EXT_REQUEST_READ` and `PARAM_EXT_SET` of `IR_PALETTE` (uint8) | same | `IMG` read and write, then read-back |
-| Confirmation | `COMMAND_ACK` or `PARAM_EXT_ACK`, then a read | same | read-back only; writes never get a reply |
-| Alive when | a camera `HEARTBEAT` arrived in the last 3 s | same | a poll reply arrived in the last 3 s |
+| Confirmation | `COMMAND_ACK` or `PARAM_EXT_ACK`, then a read | same | read-back only, because writes never get a reply; a write is sent again, up to 3 times, while the read-back still differs |
+| Alive when | a camera `HEARTBEAT` arrived in the last 3 s | same | any reply arrived in the last 3 s; the driver reads `ZOM` once a second, so there is always one while the pod is up |
 
 Neither MAVLink camera encodes `firmware_version` in the byte order the MAVLink standard defines, so each profile decodes it the way its vendor document describes.
 
@@ -288,11 +467,13 @@ Neither MAVLink camera encodes `firmware_version` in the byte order the MAVLink 
 | Setting | Default | Reason |
 | --- | --- | --- |
 | Platform heartbeat to MAVLink cameras | 1 Hz, as system 1, component 191 (`MAV_COMP_ID_ONBOARD_COMPUTER`) | the camera only talks to addresses it has heard from |
-| Camera counted offline after | 3 s without a heartbeat (MAVLink) or a poll reply (LC-30T) | three missed beats |
+| Camera counted offline after | 3 s without a heartbeat (MAVLink) or any reply (LC-30T) | three missed beats |
 | State polling | every 1 s | keeps the cache fresh; this traffic stays on the drone's local network |
 | Camera request timeout | 500 ms per attempt, 3 attempts | MAVLink resends increment `confirmation`, as the command protocol specifies |
 | Retries of `zoom_step` | none | not idempotent; re-read instead |
 | Gap between LC-30T frames | at least 50 ms | the vendor's recommendation |
+| LC-30T sign of life | a `ZOM` read every 1 s | the core doesn't poll a camera that's offline, so the driver needs its own sign of life to notice the pod coming back |
+| LC-30T write attempts | 3, while the read-back still differs | a lost datagram and an ignored value look the same from here; every write names a value, so sending it again is safe |
 | LC-30T start-up | `connecting` until it answers | the real pod needs about 8 s after power-on |
 | API request deadline | 5 s | after that the GCS gets `timeout` |
 | Command queue | 16 waiting commands | more than that gets `busy` |
@@ -305,13 +486,14 @@ Every driver, built in or added later, offers the same operations to the core:
 - **read**: returns the current value of every property; used for polling.
 - **write** a property: returns the value the camera reports afterwards, or one of the errors above.
 - **invoke** an action: returns the values of the properties it changed.
-- **status**: reports `online` or `offline` whenever that changes.
+- **last heard**: how long ago the camera was last heard from. The core turns this into `online` or `offline` with one 3-second rule, the same for every driver.
 
 The core promises the driver that calls never overlap and that every value has already been checked against the driver's own descriptors. The driver promises that success means the camera confirmed the change, and that every call ends within its timeout.
 
 ### Adding new payload types
 
 - A new MAVLink camera needs only a new profile in the MAVLink driver.
+- A new kind of device on a protocol the platform already speaks, say a MAVLink gimbal, is a new driver in that protocol's folder (`drivers/mavlink/gimbal/`, next to `camera/`), sharing the protocol's link.
 - A new protocol or a new kind of payload needs a new driver. Because the API is made of described properties and actions, a driver for something new, say a laser rangefinder with a read-only `range_m` property and a `measure` action, appears in the API without any change to the core or to the routes.
 - Third-party drivers without rebuilding the platform (planned): an external driver is an executable registered for a URI scheme. The platform starts it and speaks the driver contract to it as JSON messages over its standard input and output, so built-in and external drivers look the same to the core.
 
@@ -326,3 +508,16 @@ The core promises the driver that calls never overlap and that every value has a
 | Success means confirmed by the camera | the GCS can trust a 200 | fire and forget: faster, but LC-30T failures would go unnoticed |
 | Reads from a cache refreshed every second | quick answers over a slow link | asking the camera on every read |
 | Out-of-range numbers refused, not clamped | mistakes stay visible, and the range is in the descriptor | clamp silently, as the LC-30T does |
+| The core is one task that owns the driver | commands never overlap, reads never wait for commands, and a full queue means `busy`, with no lock around the driver | the driver shared behind a lock: simpler at first, but every caller would wait for the camera |
+| The core decides `online` or `offline` from when each driver last heard its camera | one 3-second rule for every driver | each driver deciding for itself |
+| Drivers grouped by protocol, with camera models and device kinds inside | the protocol code is what drivers share | grouping by device kind (`cameras/`, `gimbals/`): each MAVLink device kind would need its own copy of the MAVLink link |
+| LC-30T writes resent while the read-back still differs | a lost datagram and an ignored value look the same, and resending is safe because a write names a value | `rejected` at the first difference: one lost datagram would fail the request |
+| Tests run the real simulators and the real platform as separate processes, with a proxy for a bad link | they test what the GCS sees, against the closest thing to the real cameras | a mock camera inside each test: faster, but it checks our reading of the vendor documents rather than the cameras |
+| Benchmarks time whole requests | nearly all the time is spent waiting for the camera | timing single functions such as frame parsing: precise, but it measures microseconds that don't matter here |
+
+### Limitations and next steps
+
+- The LC-30T read-back assumes the pod reports a new value as soon as it has accepted it, as the simulator does. A real lens takes time to move: if a real pod's `MUL` reports the position while the lens is moving, the confirmation would have to wait for the lens to settle.
+- A VLR-10 zoom of several steps that loses an answer halfway ends in `timeout`, and the zoom may have moved part of the way (`tests/faults.rs` shows this). That's what the advice for `timeout` is for: re-read `zoom` before trying again.
+- A forced profile that doesn't match the camera, say `?profile=bx20` on a VLR-10, isn't detected; writes then fail with `rejected` or `internal`. Forcing is meant for a rebranded camera that reports another name.
+- Not built yet: the events stream, metrics for monitoring, and third-party drivers (see "Adding new payload types").
