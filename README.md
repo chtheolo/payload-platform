@@ -31,7 +31,6 @@ Supported cameras, simulated in [`camera-simulations/`](camera-simulations/READM
   * [Driver contract](#driver-contract)
   * [Adding new payload types](#adding-new-payload-types)
   * [Decisions and trade-offs](#decisions-and-trade-offs)
-  * [Limitations and next steps](#limitations-and-next-steps)
 
 ## Running it
 
