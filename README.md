@@ -595,3 +595,24 @@ The core promises the driver that calls never overlap and that every value has a
 - A new kind of device on a protocol the platform already speaks, say a MAVLink gimbal, is a new driver in that protocol's folder (`drivers/mavlink/gimbal/`, next to `camera/`), sharing the protocol's link.
 - A new protocol or a new kind of payload needs a new driver. Because the API is made of described properties and actions, a driver for something new, say a laser rangefinder with a read-only `range_m` property and a `measure` action, appears in the API without any change to the core or to the routes.
 - Third-party drivers without rebuilding the platform (planned): an external driver is an executable registered for a URI scheme. The platform starts it and speaks the driver contract to it as JSON messages over its standard input and output, so built-in and external drivers look the same to the core.
+
+### Decisions and trade-offs
+
+| Decision | Why | Alternative considered |
+|---|---|---|
+| HTTP + JSON towards the GCS | works on any IP datalink, any GCS can use it, easy to demonstrate | the MAVLink camera protocol: the drone standard and fine on narrow serial radios, but it has no standard palette message and the GCS would inherit every vendor quirk; gRPC: typed and good at streaming, heavier to demonstrate; MQTT: good for fleets, needs a broker |
+| Described properties and actions instead of one route per feature | new payload kinds don't change the API | fixed routes such as `PUT /zoom`: more explicit, but every new feature changes the core |
+| Zoom as a magnification factor | physical, and comparable across cameras | percentage of the range, as MAVLink uses |
+| Absolute and step zoom on every camera, emulated where missing | the GCS never needs camera-specific logic | expose only what each camera does natively |
+| Success means confirmed by the camera | the GCS can trust a 200 | fire and forget: faster, but LC-30T failures would go unnoticed |
+| Reads from a cache refreshed every second | quick answers over a slow link | asking the camera on every read |
+| Out-of-range numbers refused, not clamped | mistakes stay visible, and the range is in the descriptor | clamp silently, as the LC-30T does |
+| The core is one task that owns the driver | commands never overlap, reads never wait for commands, and a full queue means busy, with no lock around the driver | the driver shared behind a lock: simpler at first, but every caller would wait for the camera |
+| The core decides online or offline from when each driver last heard its camera | one 3-second rule for every driver | each driver deciding for itself |
+| Drivers grouped by protocol, with camera models and device kinds inside | the protocol code is what drivers share | grouping by device kind (`cameras/`, `gimbals/`): each MAVLink device kind would need its own copy of the MAVLink link |
+| LC-30T writes resent while the read-back still differs | a lost datagram and an ignored value look the same, and resending is safe because a write names a value | rejected at the first difference: one lost datagram would fail the request |
+| Tests run the real simulators and the real platform as separate processes, with a proxy for a bad link | they test what the GCS sees, against the closest thing to the real cameras | a mock camera inside each test: faster, but it checks our reading of the vendor documents rather than the cameras |
+| Benchmarks time whole requests | nearly all the time is spent waiting for the camera | timing single functions such as frame parsing: precise, but it measures microseconds that don't matter here |
+| Metrics as a Cargo feature that's off by default, served on a port of their own | the drone's build contains no metrics code or crates, and metrics never use the drone–ground link | metrics always compiled in and switched on at run time: one binary to test, but extra dependencies on the drone; a `/metrics` route in the GCS API: no extra port, but internals on the same link as the GCS |
+| A provisioned Grafana dashboard, as files in the repository | the same dashboard on every computer, with nothing to create, and reviewed like code | building it by hand in Grafana: lost with the container, and different for everyone |
+| Log files rotated daily, last 7 kept, written by a background thread | the logs survive on the drone without filling its storage, and writing never slows the platform | only the terminal and the system journal: enough under systemd, not without it |
